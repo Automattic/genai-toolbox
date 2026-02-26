@@ -77,10 +77,11 @@ type Config struct {
 	Project            string   `yaml:"project"`
 	Location           string   `yaml:"location"`
 	SessionLength      int64    `yaml:"sessionLength"`
-	OAuthBaseURL      string   `yaml:"oauth_base_url"`
-	OAuthClientID     string   `yaml:"oauth_client_id"`
-	OAuthClientSecret string   `yaml:"oauth_client_secret"`
-	OAuthScopes       []string `yaml:"oauth_scopes"`
+	OAuthBaseURL       string   `yaml:"oauth_base_url"`
+	OAuthClientID      string   `yaml:"oauth_client_id"`
+	OAuthClientSecret  string   `yaml:"oauth_client_secret"`
+	OAuthTokenEndpoint string   `yaml:"oauth_token_endpoint"`
+	OAuthScopes        []string `yaml:"oauth_scopes"`
 }
 
 func (r Config) SourceConfigType() string {
@@ -183,9 +184,13 @@ func (s *Source) OAuthProviderConfig() *sources.OAuthConfig {
 		scopes = []string{"cors_api"}
 	}
 	oauthBase := strings.TrimRight(s.OAuthBaseURL, "/")
+	tokenEndpoint := s.OAuthTokenEndpoint
+	if tokenEndpoint == "" {
+		tokenEndpoint = strings.TrimRight(s.BaseURL, "/") + "/api/token"
+	}
 	return &sources.OAuthConfig{
 		AuthorizeEndpoint: oauthBase + "/authorize",
-		TokenEndpoint:     strings.TrimRight(s.BaseURL, "/") + "/api/token",
+		TokenEndpoint:     tokenEndpoint,
 		ClientID:          s.OAuthClientID,
 		ClientSecret:      s.OAuthClientSecret,
 		Scopes:            scopes,

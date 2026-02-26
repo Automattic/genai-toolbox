@@ -28,7 +28,7 @@ import (
 func protectedResourceHandler(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		metadata := map[string]any{
-			"resource":                cfg.BaseURL,
+			"resource":                cfg.BaseURL + "/mcp",
 			"authorization_servers":   []string{cfg.BaseURL},
 			"bearer_methods_supported": []string{"header"},
 		}
@@ -41,11 +41,6 @@ func protectedResourceHandler(cfg *Config) http.HandlerFunc {
 // GET /.well-known/oauth-authorization-server
 func authServerMetadataHandler(cfg *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		authMethods := []string{"none"}
-		if cfg.Provider.ClientSecret != "" {
-			authMethods = []string{"client_secret_post"}
-		}
-
 		metadata := map[string]any{
 			"issuer":                                cfg.BaseURL,
 			"authorization_endpoint":                cfg.BaseURL + "/authorize",
@@ -53,7 +48,7 @@ func authServerMetadataHandler(cfg *Config) http.HandlerFunc {
 			"registration_endpoint":                 cfg.BaseURL + "/register",
 			"response_types_supported":              []string{"code"},
 			"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
-			"token_endpoint_auth_methods_supported": authMethods,
+			"token_endpoint_auth_methods_supported": []string{"none"},
 			"scopes_supported":                      cfg.Provider.Scopes,
 			"code_challenge_methods_supported":      []string{"S256"},
 		}
@@ -138,18 +133,13 @@ func registerHandler(cfg *Config) http.HandlerFunc {
 
 		redirectURIs, _ := requestBody["redirect_uris"]
 
-		authMethod := "none"
-		if cfg.Provider.ClientSecret != "" {
-			authMethod = "client_secret_post"
-		}
-
 		responseBody := map[string]any{
 			"client_id":                  cfg.Provider.ClientID,
-			"client_secret":              cfg.Provider.ClientSecret,
+			"client_secret":              "",
 			"redirect_uris":              redirectURIs,
 			"grant_types":                []string{"authorization_code", "refresh_token"},
 			"response_types":             []string{"code"},
-			"token_endpoint_auth_method": authMethod,
+			"token_endpoint_auth_method": "none",
 			"scope":                      strings.Join(cfg.Provider.Scopes, " "),
 		}
 

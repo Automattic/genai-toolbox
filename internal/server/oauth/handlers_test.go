@@ -76,8 +76,8 @@ func TestProtectedResourceHandler(t *testing.T) {
 		t.Fatalf("failed to decode response body: %v", err)
 	}
 
-	if body["resource"] != "http://localhost:5000" {
-		t.Errorf("expected resource http://localhost:5000, got %v", body["resource"])
+	if body["resource"] != "http://localhost:5000/mcp" {
+		t.Errorf("expected resource http://localhost:5000/mcp, got %v", body["resource"])
 	}
 
 	authServers, ok := body["authorization_servers"].([]any)
@@ -87,7 +87,7 @@ func TestProtectedResourceHandler(t *testing.T) {
 }
 
 func TestAuthServerMetadataHandler(t *testing.T) {
-	t.Run("public client", func(t *testing.T) {
+	t.Run("always advertises none auth method", func(t *testing.T) {
 		cfg := testPublicConfig()
 		handler := authServerMetadataHandler(cfg)
 
@@ -113,11 +113,11 @@ func TestAuthServerMetadataHandler(t *testing.T) {
 
 		authMethods, ok := body["token_endpoint_auth_methods_supported"].([]any)
 		if !ok || len(authMethods) != 1 || authMethods[0] != "none" {
-			t.Errorf("expected auth method 'none' for public client, got %v", body["token_endpoint_auth_methods_supported"])
+			t.Errorf("expected auth method 'none', got %v", body["token_endpoint_auth_methods_supported"])
 		}
 	})
 
-	t.Run("confidential client", func(t *testing.T) {
+	t.Run("confidential config still advertises none", func(t *testing.T) {
 		cfg := testConfidentialConfig()
 		handler := authServerMetadataHandler(cfg)
 
@@ -131,8 +131,8 @@ func TestAuthServerMetadataHandler(t *testing.T) {
 		}
 
 		authMethods, ok := body["token_endpoint_auth_methods_supported"].([]any)
-		if !ok || len(authMethods) != 1 || authMethods[0] != "client_secret_post" {
-			t.Errorf("expected auth method 'client_secret_post' for confidential client, got %v", body["token_endpoint_auth_methods_supported"])
+		if !ok || len(authMethods) != 1 || authMethods[0] != "none" {
+			t.Errorf("expected auth method 'none' even for confidential config, got %v", body["token_endpoint_auth_methods_supported"])
 		}
 	})
 }
@@ -298,11 +298,11 @@ func TestRegisterHandler(t *testing.T) {
 			t.Errorf("expected token_endpoint_auth_method none, got %v", body["token_endpoint_auth_method"])
 		}
 		if body["client_secret"] != "" {
-			t.Errorf("expected empty client_secret for public client, got %v", body["client_secret"])
+			t.Errorf("expected empty client_secret, got %v", body["client_secret"])
 		}
 	})
 
-	t.Run("confidential client", func(t *testing.T) {
+	t.Run("confidential config never leaks secret", func(t *testing.T) {
 		cfg := testConfidentialConfig()
 		handler := registerHandler(cfg)
 
@@ -322,11 +322,11 @@ func TestRegisterHandler(t *testing.T) {
 			t.Fatalf("failed to decode response body: %v", err)
 		}
 
-		if body["token_endpoint_auth_method"] != "client_secret_post" {
-			t.Errorf("expected token_endpoint_auth_method client_secret_post, got %v", body["token_endpoint_auth_method"])
+		if body["token_endpoint_auth_method"] != "none" {
+			t.Errorf("expected token_endpoint_auth_method none even for confidential config, got %v", body["token_endpoint_auth_method"])
 		}
-		if body["client_secret"] != "test-client-secret" {
-			t.Errorf("expected client_secret test-client-secret, got %v", body["client_secret"])
+		if body["client_secret"] != "" {
+			t.Errorf("expected empty client_secret (secret should never be exposed), got %v", body["client_secret"])
 		}
 	})
 }

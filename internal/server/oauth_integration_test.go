@@ -192,7 +192,7 @@ func TestOAuthDiscoveryEndpoints(t *testing.T) {
 			t.Fatalf("failed to decode body: %s", err)
 		}
 
-		if body["resource"] != "http://localhost:5000" {
+		if body["resource"] != "http://localhost:5000/mcp" {
 			t.Errorf("unexpected resource: %v", body["resource"])
 		}
 		authServers, ok := body["authorization_servers"].([]any)
