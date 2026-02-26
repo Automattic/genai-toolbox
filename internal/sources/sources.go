@@ -65,6 +65,23 @@ type Source interface {
 	ToConfig() SourceConfig
 }
 
+// OAuthProvider is an optional interface for sources that support OAuth authorization
+// proxy. When implemented, the server will expose OAuth discovery and proxy endpoints
+// per RFC 8414 and RFC 9728.
+type OAuthProvider interface {
+	OAuthProviderConfig() *OAuthConfig
+}
+
+// OAuthConfig holds the OAuth configuration for a source that acts as an OAuth proxy.
+type OAuthConfig struct {
+	AuthorizeEndpoint string   // full URL of the upstream authorize endpoint (e.g. https://looker.example.com/authorize)
+	TokenEndpoint     string   // full URL of the upstream token endpoint (e.g. https://looker.example.com/api/token)
+	ClientID          string   // pre-registered OAuth client ID
+	ClientSecret      string   // OAuth client secret (empty for public clients)
+	Scopes            []string // supported scopes
+	VerifySSL         bool     // TLS verification for token proxy requests
+}
+
 // InitConnectionSpan adds a span for database pool connection initialization
 func InitConnectionSpan(ctx context.Context, tracer trace.Tracer, sourceType, sourceName string) (context.Context, trace.Span) {
 	ctx, span := tracer.Start(

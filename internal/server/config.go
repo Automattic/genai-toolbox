@@ -77,6 +77,9 @@ type ServerConfig struct {
 	UserAgentMetadata []string
 	// PollInterval sets the polling frequency for configuration file updates.
 	PollInterval int
+	// PublicURL is the externally-reachable URL of this server, used for OAuth metadata.
+	// If empty, defaults to http://<address>:<port>.
+	PublicURL string
 }
 
 type logFormat string
