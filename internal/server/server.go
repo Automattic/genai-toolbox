@@ -375,17 +375,19 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	// Scan sources for OAuthProvider implementations (HTTP transport only)
 	var oauthCfg *oauth.Config
 	if !cfg.Stdio {
-		for _, src := range sourcesMap {
+		var oauthSourceName string
+		for name, src := range sourcesMap {
 			if provider, ok := src.(sources.OAuthProvider); ok {
 				if provCfg := provider.OAuthProviderConfig(); provCfg != nil {
 					if oauthCfg != nil {
-						return nil, fmt.Errorf("multiple sources implement OAuthProvider; only one is supported")
+						return nil, fmt.Errorf("multiple sources implement OAuthProvider (at least %q and %q); only one is supported", oauthSourceName, name)
 					}
+					oauthSourceName = name
 					baseURL := cfg.PublicURL
 					if baseURL == "" {
 						// Warn if bind address is non-routable (0.0.0.0, 127.0.0.1, etc.)
 						if cfg.Address == "0.0.0.0" || cfg.Address == "" || cfg.Address == "127.0.0.1" || cfg.Address == "localhost" {
-							l.WarnContext(ctx, fmt.Sprintf("OAuth is active but --public-url is not set and bind address is %q. OAuth metadata will reference http://%s which may not be reachable by clients. Set --public-url to the externally-reachable URL.", cfg.Address, addr))
+							l.WarnContext(ctx, fmt.Sprintf("OAuth is active but --public-url is not set and bind address is %q. OAuth metadata will default to http://%s based on the bind address. If this URL is not externally reachable (e.g. behind a proxy, load balancer, or ingress), set --public-url to the externally reachable URL that clients use.", cfg.Address, addr))
 						}
 						baseURL = fmt.Sprintf("http://%s", addr)
 					}

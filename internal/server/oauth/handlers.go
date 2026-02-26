@@ -18,9 +18,11 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 // protectedResourceHandler returns RFC 9728 protected resource metadata.
@@ -33,7 +35,9 @@ func protectedResourceHandler(cfg *Config) http.HandlerFunc {
 			"bearer_methods_supported": []string{"header"},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(metadata)
+		if err := json.NewEncoder(w).Encode(metadata); err != nil {
+			slog.Error("failed to encode protected resource metadata", "error", err)
+		}
 	}
 }
 
@@ -53,7 +57,9 @@ func authServerMetadataHandler(cfg *Config) http.HandlerFunc {
 			"code_challenge_methods_supported":      []string{"S256"},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(metadata)
+		if err := json.NewEncoder(w).Encode(metadata); err != nil {
+			slog.Error("failed to encode authorization server metadata", "error", err)
+		}
 	}
 }
 
@@ -85,6 +91,14 @@ func authorizeHandler(cfg *Config) http.HandlerFunc {
 // Strips the `resource` param, injects `client_id` (and `client_secret` for
 // confidential clients), and proxies to the upstream token endpoint.
 func tokenHandler(cfg *Config) http.HandlerFunc {
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: !cfg.Provider.VerifySSL,
+			},
+		},
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			http.Error(w, "invalid form data", http.StatusBadRequest)
@@ -97,13 +111,6 @@ func tokenHandler(cfg *Config) http.HandlerFunc {
 		if cfg.Provider.ClientSecret != "" {
 			params.Set("client_secret", cfg.Provider.ClientSecret)
 		}
-
-		transport := &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: !cfg.Provider.VerifySSL,
-			},
-		}
-		client := &http.Client{Transport: transport}
 
 		resp, err := client.Post(cfg.Provider.TokenEndpoint, "application/x-www-form-urlencoded", strings.NewReader(params.Encode()))
 		if err != nil {
@@ -118,7 +125,9 @@ func tokenHandler(cfg *Config) http.HandlerFunc {
 			}
 		}
 		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
+		if _, err := io.Copy(w, resp.Body); err != nil {
+			slog.Error("failed to copy token response body", "error", err)
+		}
 	}
 }
 
@@ -148,6 +157,8 @@ func registerHandler(cfg *Config) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(responseBody)
+		if err := json.NewEncoder(w).Encode(responseBody); err != nil {
+			slog.Error("failed to encode client registration response", "error", err)
+		}
 	}
 }

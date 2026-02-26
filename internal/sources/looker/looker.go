@@ -181,6 +181,8 @@ func (s *Source) OAuthProviderConfig() *sources.OAuthConfig {
 	}
 	scopes := s.OAuthScopes
 	if len(scopes) == 0 {
+		// "cors_api" is the default Looker scope for CORS-enabled API access,
+		// required by browser-based OAuth flows against Looker instances.
 		scopes = []string{"cors_api"}
 	}
 	oauthBase := strings.TrimRight(s.OAuthBaseURL, "/")

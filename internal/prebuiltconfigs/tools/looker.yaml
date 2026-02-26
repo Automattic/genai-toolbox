@@ -28,6 +28,7 @@ sources:
         oauth_client_id: ${LOOKER_OAUTH_CLIENT_ID:}
         oauth_client_secret: ${LOOKER_OAUTH_CLIENT_SECRET:}
         oauth_token_endpoint: ${LOOKER_OAUTH_TOKEN_ENDPOINT:}
+        oauth_scopes: ${LOOKER_OAUTH_SCOPES:}
 
 tools:
     get_models:
