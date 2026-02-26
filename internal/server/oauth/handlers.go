@@ -71,6 +71,9 @@ func authorizeHandler(cfg *Config) http.HandlerFunc {
 		params := r.URL.Query()
 		params.Del("resource")
 		params.Set("client_id", cfg.Provider.ClientID)
+		if len(cfg.Provider.Scopes) > 0 && params.Get("scope") == "" {
+			params.Set("scope", strings.Join(cfg.Provider.Scopes, " "))
+		}
 		upstreamURL.RawQuery = params.Encode()
 
 		http.Redirect(w, r, upstreamURL.String(), http.StatusFound)

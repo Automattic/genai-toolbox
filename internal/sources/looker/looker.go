@@ -189,7 +189,7 @@ func (s *Source) OAuthProviderConfig() *sources.OAuthConfig {
 		tokenEndpoint = strings.TrimRight(s.BaseURL, "/") + "/api/token"
 	}
 	return &sources.OAuthConfig{
-		AuthorizeEndpoint: oauthBase + "/authorize",
+		AuthorizeEndpoint: oauthBase + "/auth",
 		TokenEndpoint:     tokenEndpoint,
 		ClientID:          s.OAuthClientID,
 		ClientSecret:      s.OAuthClientSecret,
