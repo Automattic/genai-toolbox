@@ -145,7 +145,12 @@ func runMcpInitialize(t *testing.T, ts *httptest.Server) string {
 	}
 	reqMarshal, _ := json.Marshal(initBody)
 
-	resp, _, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal), nil)
+	// Include Authorization header so that initialize succeeds when OAuth is
+	// configured (the gate requires auth for all methods including initialize).
+	initHeader := map[string]string{
+		"Authorization": "Bearer init-token",
+	}
+	resp, _, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal), initHeader)
 	if err != nil {
 		t.Fatalf("MCP initialize failed: %s", err)
 	}
@@ -360,23 +365,21 @@ func TestOAuthClientRegistration(t *testing.T) {
 
 func TestMcpWithOAuth_WWWAuthenticateOnUnauthorized(t *testing.T) {
 	oauthCfg := testOAuthConfig("http://localhost:5000")
-	// tool5 requires client authorization and will return 401 when no auth header is present
-	r, shutdown := setUpServerWithOAuth(t, oauthCfg, []MockTool{tool1, tool5})
+	r, shutdown := setUpServerWithOAuth(t, oauthCfg, []MockTool{tool1})
 	defer shutdown()
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
-	// Initialize MCP session first (401 HTTP status requires initialized session)
-	runMcpInitialize(t, ts)
-
+	// The very first MCP request (initialize) without an Authorization header
+	// should return 401 with WWW-Authenticate to trigger OAuth discovery.
 	reqBody := jsonrpc.JSONRPCRequest{
 		Jsonrpc: jsonrpcVersion,
-		Id:      "tools-call-auth-required",
+		Id:      "mcp-init-no-auth",
 		Request: jsonrpc.Request{
-			Method: "tools/call",
+			Method: "initialize",
 		},
 		Params: map[string]any{
-			"name": "require_client_auth_tool",
+			"protocolVersion": protocolVersion20250618,
 		},
 	}
 	reqMarshal, err := json.Marshal(reqBody)
@@ -384,10 +387,7 @@ func TestMcpWithOAuth_WWWAuthenticateOnUnauthorized(t *testing.T) {
 		t.Fatalf("error marshaling request: %s", err)
 	}
 
-	header := map[string]string{
-		"MCP-Protocol-Version": protocolVersion20250618,
-	}
-	resp, body, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal), header)
+	resp, body, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal), nil)
 	if err != nil {
 		t.Fatalf("request failed: %s", err)
 	}
@@ -620,21 +620,15 @@ func TestOAuthFullDiscoveryFlow(t *testing.T) {
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
-	// Initialize MCP session
-	runMcpInitialize(t, ts)
-
-	// Step 1: Call MCP tool that requires auth -- get 401 with discovery hint
+	// Step 1: First MCP request (initialize) without auth -- get 401 with discovery hint
 	reqBody := jsonrpc.JSONRPCRequest{
 		Jsonrpc: jsonrpcVersion,
 		Id:      "step1",
-		Request: jsonrpc.Request{Method: "tools/call"},
-		Params:  map[string]any{"name": "require_client_auth_tool"},
+		Request: jsonrpc.Request{Method: "initialize"},
+		Params:  map[string]any{"protocolVersion": protocolVersion20250618},
 	}
 	reqMarshal, _ := json.Marshal(reqBody)
-	header := map[string]string{
-		"MCP-Protocol-Version": protocolVersion20250618,
-	}
-	resp, _, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal), header)
+	resp, _, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal), nil)
 	if err != nil {
 		t.Fatalf("step 1 failed: %s", err)
 	}

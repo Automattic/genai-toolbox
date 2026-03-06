@@ -631,11 +631,12 @@ func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVers
 		return "", nil, err
 	}
 
-	// When OAuth is configured, require authentication for all operational
-	// methods (everything after initialize/ping). header is nil for STDIO
-	// transport where OAuth does not apply.
-	if s.oauthConfig != nil && header != nil &&
-		baseMessage.Method != mcputil.INITIALIZE && baseMessage.Method != "ping" {
+	// When OAuth is configured, require authentication for all methods
+	// (including initialize, so that the very first POST triggers the
+	// client's OAuth discovery flow). Ping is exempted as a lightweight
+	// health-check. header is nil for STDIO transport where OAuth does
+	// not apply.
+	if s.oauthConfig != nil && header != nil && baseMessage.Method != "ping" {
 		authHeader := header.Get("Authorization")
 		if authHeader == "" {
 			err := util.NewClientServerError(
