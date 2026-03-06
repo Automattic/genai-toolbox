@@ -412,7 +412,7 @@ func TestMcpWithOAuth_WWWAuthenticateOnUnauthorized(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected error object in response, got %v", got)
 	}
-	if errorObj["message"] != "missing access token in the 'Authorization' header" {
+	if errorObj["message"] != "authentication required" {
 		t.Errorf("unexpected error message: %v", errorObj["message"])
 	}
 }
@@ -426,7 +426,8 @@ func TestMcpWithOAuth_NoWWWAuthenticateOnSuccess(t *testing.T) {
 
 	runMcpInitialize(t, ts)
 
-	// tool1 doesn't require auth, so the call should succeed without WWW-Authenticate
+	// tool1 doesn't require tool-level auth, so the call should succeed without WWW-Authenticate.
+	// An Authorization header is still required at the gate level when OAuth is configured.
 	reqBody := jsonrpc.JSONRPCRequest{
 		Jsonrpc: jsonrpcVersion,
 		Id:      "tools-call-public",
@@ -441,6 +442,7 @@ func TestMcpWithOAuth_NoWWWAuthenticateOnSuccess(t *testing.T) {
 
 	header := map[string]string{
 		"MCP-Protocol-Version": protocolVersion20250618,
+		"Authorization":        "Bearer some-token",
 	}
 	resp, _, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal), header)
 	if err != nil {
@@ -454,6 +456,67 @@ func TestMcpWithOAuth_NoWWWAuthenticateOnSuccess(t *testing.T) {
 	wwwAuth := resp.Header.Get("WWW-Authenticate")
 	if wwwAuth != "" {
 		t.Errorf("expected no WWW-Authenticate on success, got %q", wwwAuth)
+	}
+}
+
+func TestMcpWithOAuth_ToolsListRequiresAuth(t *testing.T) {
+	oauthCfg := testOAuthConfig("http://localhost:5000")
+	r, shutdown := setUpServerWithOAuth(t, oauthCfg, []MockTool{tool1})
+	defer shutdown()
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	runMcpInitialize(t, ts)
+
+	reqBody := jsonrpc.JSONRPCRequest{
+		Jsonrpc: jsonrpcVersion,
+		Id:      "tools-list-no-auth",
+		Request: jsonrpc.Request{
+			Method: "tools/list",
+		},
+	}
+	reqMarshal, _ := json.Marshal(reqBody)
+
+	header := map[string]string{
+		"MCP-Protocol-Version": protocolVersion20250618,
+	}
+
+	// Without Authorization header, should get 401
+	resp, body, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal), header)
+	if err != nil {
+		t.Fatalf("request failed: %s", err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 without auth, got %d", resp.StatusCode)
+	}
+	wwwAuth := resp.Header.Get("WWW-Authenticate")
+	if !strings.Contains(wwwAuth, "oauth-protected-resource") {
+		t.Errorf("expected WWW-Authenticate header, got %q", wwwAuth)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("error unmarshalling body: %s", err)
+	}
+	errorObj, ok := got["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected error object, got %v", got)
+	}
+	if errorObj["message"] != "authentication required" {
+		t.Errorf("unexpected error message: %v", errorObj["message"])
+	}
+
+	// With Authorization header, should succeed
+	headerWithAuth := map[string]string{
+		"MCP-Protocol-Version": protocolVersion20250618,
+		"Authorization":        "Bearer some-token",
+	}
+	reqMarshal2, _ := json.Marshal(reqBody)
+	resp2, _, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal2), headerWithAuth)
+	if err != nil {
+		t.Fatalf("request failed: %s", err)
+	}
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 with auth, got %d", resp2.StatusCode)
 	}
 }
 

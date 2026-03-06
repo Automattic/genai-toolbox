@@ -631,6 +631,24 @@ func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVers
 		return "", nil, err
 	}
 
+	// When OAuth is configured, require authentication for all operational
+	// methods (everything after initialize/ping). header is nil for STDIO
+	// transport where OAuth does not apply.
+	if s.oauthConfig != nil && header != nil &&
+		baseMessage.Method != mcputil.INITIALIZE && baseMessage.Method != "ping" {
+		authHeader := header.Get("Authorization")
+		if authHeader == "" {
+			err := util.NewClientServerError(
+				"authentication required",
+				http.StatusUnauthorized,
+				nil,
+			)
+			rpcErr := jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, err.Error(), nil)
+			span.SetStatus(codes.Error, err.Error())
+			return "", rpcErr, err
+		}
+	}
+
 	// Process the method
 	switch baseMessage.Method {
 	case mcputil.INITIALIZE:
