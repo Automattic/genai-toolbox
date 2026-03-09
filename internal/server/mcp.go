@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/googleapis/genai-toolbox/internal/server/mcp"
 	"github.com/googleapis/genai-toolbox/internal/server/mcp/jsonrpc"
+	"github.com/googleapis/genai-toolbox/internal/server/oauth"
 	mcputil "github.com/googleapis/genai-toolbox/internal/server/mcp/util"
 	v20241105 "github.com/googleapis/genai-toolbox/internal/server/mcp/v20241105"
 	v20250326 "github.com/googleapis/genai-toolbox/internal/server/mcp/v20250326"
@@ -291,6 +292,11 @@ func mcpRouter(s *Server) (chi.Router, error) {
 	r.Use(middleware.AllowContentType("application/json", "application/json-rpc", "application/jsonrequest"))
 	r.Use(middleware.StripSlashes)
 	r.Use(render.SetContentType(render.ContentTypeJSON))
+
+	// Inject WWW-Authenticate header on 401 responses when OAuth is configured
+	if s.oauthConfig != nil {
+		r.Use(oauth.WWWAuthenticateMiddleware(s.oauthConfig.BaseURL))
+	}
 
 	r.Get("/sse", func(w http.ResponseWriter, r *http.Request) { sseHandler(s, w, r) })
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) { methodNotAllowed(s, w, r) })
@@ -623,6 +629,25 @@ func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVers
 			span.SetStatus(codes.Error, err.Error())
 		}
 		return "", nil, err
+	}
+
+	// When OAuth is configured, require authentication for all methods
+	// (including initialize, so that the very first POST triggers the
+	// client's OAuth discovery flow). Ping is exempted as a lightweight
+	// health-check. header is nil for STDIO transport where OAuth does
+	// not apply.
+	if s.oauthConfig != nil && header != nil && baseMessage.Method != "ping" {
+		authHeader := header.Get("Authorization")
+		if authHeader == "" {
+			err := util.NewClientServerError(
+				"authentication required",
+				http.StatusUnauthorized,
+				nil,
+			)
+			rpcErr := jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, err.Error(), nil)
+			span.SetStatus(codes.Error, err.Error())
+			return "", rpcErr, err
+		}
 	}
 
 	// Process the method

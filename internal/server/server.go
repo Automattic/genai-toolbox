@@ -33,6 +33,7 @@ import (
 	"github.com/googleapis/genai-toolbox/internal/embeddingmodels"
 	"github.com/googleapis/genai-toolbox/internal/log"
 	"github.com/googleapis/genai-toolbox/internal/prompts"
+	"github.com/googleapis/genai-toolbox/internal/server/oauth"
 	"github.com/googleapis/genai-toolbox/internal/server/resources"
 	"github.com/googleapis/genai-toolbox/internal/sources"
 	"github.com/googleapis/genai-toolbox/internal/telemetry"
@@ -52,6 +53,7 @@ type Server struct {
 	instrumentation *telemetry.Instrumentation
 	sseManager      *sseManager
 	ResourceMgr     *resources.ResourceManager
+	oauthConfig     *oauth.Config
 }
 
 func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
@@ -370,6 +372,36 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 
 	resourceManager := resources.NewResourceManager(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, toolsetsMap, promptsMap, promptsetsMap)
 
+	// Scan sources for OAuthProvider implementations (HTTP transport only)
+	var oauthCfg *oauth.Config
+	if !cfg.Stdio {
+		var oauthSourceName string
+		for name, src := range sourcesMap {
+			if provider, ok := src.(sources.OAuthProvider); ok {
+				if provCfg := provider.OAuthProviderConfig(); provCfg != nil {
+					if oauthCfg != nil {
+						return nil, fmt.Errorf("multiple sources implement OAuthProvider (at least %q and %q); only one is supported", oauthSourceName, name)
+					}
+					oauthSourceName = name
+					baseURL := cfg.PublicURL
+					if baseURL == "" {
+						// Warn if bind address is non-routable (0.0.0.0, 127.0.0.1, etc.)
+						if cfg.Address == "0.0.0.0" || cfg.Address == "" || cfg.Address == "127.0.0.1" || cfg.Address == "localhost" {
+							l.WarnContext(ctx, fmt.Sprintf("OAuth is active but --public-url is not set and bind address is %q. OAuth metadata will default to http://%s based on the bind address. If this URL is not externally reachable (e.g. behind a proxy, load balancer, or ingress), set --public-url to the externally reachable URL that clients use.", cfg.Address, addr))
+						}
+						baseURL = fmt.Sprintf("http://%s", addr)
+					}
+					// Strip trailing slash
+					baseURL = strings.TrimRight(baseURL, "/")
+					oauthCfg = &oauth.Config{
+						BaseURL:  baseURL,
+						Provider: provCfg,
+					}
+				}
+			}
+		}
+	}
+
 	s := &Server{
 		version:         cfg.Version,
 		srv:             srv,
@@ -378,6 +410,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		instrumentation: instrumentation,
 		sseManager:      sseManager,
 		ResourceMgr:     resourceManager,
+		oauthConfig:     oauthCfg,
 	}
 
 	// cors
@@ -389,7 +422,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowCredentials: true, // required since Toolbox uses auth headers
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Mcp-Session-Id", "MCP-Protocol-Version"},
-		ExposedHeaders:   []string{"Mcp-Session-Id"}, // headers that are sent to clients
+		ExposedHeaders:   []string{"Mcp-Session-Id", "WWW-Authenticate"}, // headers that are sent to clients
 		MaxAge:           300,                        // cache preflight results for 5 minutes
 	}
 	r.Use(cors.Handler(corsOpts))
@@ -406,6 +439,12 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		allowedHostsMap[hostname] = struct{}{}
 	}
 	r.Use(hostCheck(allowedHostsMap))
+
+	// OAuth discovery and proxy endpoints (mounted before /mcp)
+	if oauthCfg != nil {
+		oauth.MountRoutes(r, oauthCfg)
+		l.InfoContext(ctx, fmt.Sprintf("OAuth proxy enabled (authorize: %s, client_id: %s)", oauthCfg.Provider.AuthorizeEndpoint, oauthCfg.Provider.ClientID))
+	}
 
 	// control plane
 	apiR, err := apiRouter(s)
