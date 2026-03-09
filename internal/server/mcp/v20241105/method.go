@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/googleapis/genai-toolbox/internal/prompts"
 	"github.com/googleapis/genai-toolbox/internal/server/mcp/jsonrpc"
@@ -123,7 +124,7 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, resourceMgr *re
 		errMsg := fmt.Errorf("error during invocation: %w", err)
 		return jsonrpc.NewError(id, jsonrpc.INTERNAL_ERROR, errMsg.Error(), nil), errMsg
 	}
-	accessToken := tools.AccessToken(header.Get(authTokenHeadername))
+	accessToken := tools.AccessToken(strings.TrimSpace(header.Get(authTokenHeadername)))
 
 	// Check if this specific tool requires the standard authorization header
 	clientAuth, err := tool.RequiresClientAuthorization(resourceMgr)

@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -176,7 +177,7 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		_ = render.Render(w, r, newErrResponse(errMsg, http.StatusInternalServerError))
 		return
 	}
-	accessToken := tools.AccessToken(r.Header.Get(authTokenHeaderName))
+	accessToken := tools.AccessToken(strings.TrimSpace(r.Header.Get(authTokenHeaderName)))
 
 	// Check if this specific tool requires the authorization header
 	clientAuth, err := tool.RequiresClientAuthorization(s.ResourceMgr)

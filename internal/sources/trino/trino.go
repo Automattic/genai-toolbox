@@ -225,7 +225,8 @@ func (s *Source) getPoolForUser(user string) (*sql.DB, error) {
 // RunSQLAsUser executes a SQL statement as a specific user identity.
 // Used when per-user identity propagation is enabled (useClientAuth is set).
 func (s *Source) RunSQLAsUser(ctx context.Context, statement string, params []any, user string) (any, error) {
-	if strings.TrimSpace(user) == "" {
+	user = strings.TrimSpace(user)
+	if user == "" {
 		return nil, fmt.Errorf("user identity is required for per-user query execution")
 	}
 
