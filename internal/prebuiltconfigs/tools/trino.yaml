@@ -48,48 +48,48 @@ tools:
   list_tables:
     kind: trino-sql
     source: trino-source
-    description: List all tables in a given schema. Provide a fully qualified schema name (catalog.schema).
+    description: List all tables in a given schema, optionally qualified with catalog (e.g. 'my_schema' or 'my_catalog.my_schema').
     statement: SHOW TABLES FROM {{.schema}}
     templateParameters:
       - name: schema
         type: string
-        description: "The fully qualified schema name (catalog.schema) to list tables from."
+        description: "The schema name, optionally qualified with catalog (e.g. 'my_schema' or 'my_catalog.my_schema')."
         required: true
         allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)?$"]
 
   describe_table:
     kind: trino-sql
     source: trino-source
-    description: Describe the columns of a table. Provide a fully qualified table name (catalog.schema.table).
+    description: Describe the columns of a table. The table name can be unqualified, partially qualified (schema.table), or fully qualified (catalog.schema.table).
     statement: DESCRIBE {{.table}}
     templateParameters:
       - name: table
         type: string
-        description: "The fully qualified table name (catalog.schema.table) to describe."
+        description: "The table name, optionally qualified with schema and catalog (e.g. 'my_table', 'my_schema.my_table', or 'my_catalog.my_schema.my_table')."
         required: true
         allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
 
   show_create_table:
     kind: trino-sql
     source: trino-source
-    description: Show the CREATE TABLE statement for a table. Provide a fully qualified table name (catalog.schema.table).
+    description: Show the CREATE TABLE statement for a table. The table name can be unqualified, partially qualified (schema.table), or fully qualified (catalog.schema.table).
     statement: SHOW CREATE TABLE {{.table}}
     templateParameters:
       - name: table
         type: string
-        description: "The fully qualified table name (catalog.schema.table) to show the CREATE statement for."
+        description: "The table name, optionally qualified with schema and catalog (e.g. 'my_table', 'my_schema.my_table', or 'my_catalog.my_schema.my_table')."
         required: true
         allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
 
   show_stats:
     kind: trino-sql
     source: trino-source
-    description: Show table statistics. Provide a fully qualified table name (catalog.schema.table).
+    description: Show table statistics. The table name can be unqualified, partially qualified (schema.table), or fully qualified (catalog.schema.table).
     statement: SHOW STATS FOR {{.table}}
     templateParameters:
       - name: table
         type: string
-        description: "The fully qualified table name (catalog.schema.table) to show statistics for."
+        description: "The table name, optionally qualified with schema and catalog (e.g. 'my_table', 'my_schema.my_table', or 'my_catalog.my_schema.my_table')."
         required: true
         allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
 
@@ -108,12 +108,12 @@ tools:
   select_query:
     kind: trino-sql
     source: trino-source
-    description: "Execute a SELECT query on a table. Provide a fully qualified table name (catalog.schema.table), columns to select, and an optional row limit. Set limit to -1 to return all rows."
+    description: "Execute a SELECT query on a table. The table name can be unqualified, partially qualified (schema.table), or fully qualified (catalog.schema.table). Specify columns to select and an optional row limit. Set limit to -1 to return all rows."
     statement: "SELECT {{.columns}} FROM {{.table}}{{if ne .limit -1}} LIMIT {{.limit}}{{end}}"
     templateParameters:
       - name: table
         type: string
-        description: "The fully qualified table name (catalog.schema.table) to query."
+        description: "The table name, optionally qualified with schema and catalog (e.g. 'my_table', 'my_schema.my_table', or 'my_catalog.my_schema.my_table')."
         required: true
         allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
       - name: columns

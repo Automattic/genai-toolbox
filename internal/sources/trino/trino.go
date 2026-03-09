@@ -225,6 +225,10 @@ func (s *Source) getPoolForUser(user string) (*sql.DB, error) {
 // RunSQLAsUser executes a SQL statement as a specific user identity.
 // Used when per-user identity propagation is enabled (useClientAuth is set).
 func (s *Source) RunSQLAsUser(ctx context.Context, statement string, params []any, user string) (any, error) {
+	if strings.TrimSpace(user) == "" {
+		return nil, fmt.Errorf("user identity is required for per-user query execution")
+	}
+
 	if err := checkReadOnly(s.ReadOnlyMode, statement); err != nil {
 		return nil, err
 	}
@@ -249,70 +253,70 @@ var readOnlyAllowedPrefixes = []string{
 // normalizeResult holds the output of normalizeSQL: the cleaned SQL text and
 // whether a semicolon was found outside string literals and comments.
 type normalizeResult struct {
-	sql            string
+	normalized     string
 	hasSemicolon   bool
 }
 
 // normalizeSQL strips SQL comments (both line and block) while respecting
 // string literals, then collapses whitespace. It also detects semicolons
 // outside of quoted strings in a single pass.
-func normalizeSQL(sql string) normalizeResult {
+func normalizeSQL(rawSQL string) normalizeResult {
 	var buf strings.Builder
-	buf.Grow(len(sql))
+	buf.Grow(len(rawSQL))
 	hasSemicolon := false
 	i := 0
-	for i < len(sql) {
-		ch := sql[i]
+	for i < len(rawSQL) {
+		ch := rawSQL[i]
 		switch {
 		// Single-quoted string literal — copy verbatim
 		case ch == '\'':
 			buf.WriteByte(ch)
 			i++
-			for i < len(sql) {
-				if sql[i] == '\'' {
-					buf.WriteByte(sql[i])
+			for i < len(rawSQL) {
+				if rawSQL[i] == '\'' {
+					buf.WriteByte(rawSQL[i])
 					i++
 					// escaped quote ''
-					if i < len(sql) && sql[i] == '\'' {
-						buf.WriteByte(sql[i])
+					if i < len(rawSQL) && rawSQL[i] == '\'' {
+						buf.WriteByte(rawSQL[i])
 						i++
 						continue
 					}
 					break
 				}
-				buf.WriteByte(sql[i])
+				buf.WriteByte(rawSQL[i])
 				i++
 			}
 		// Double-quoted identifier — copy verbatim
 		case ch == '"':
 			buf.WriteByte(ch)
 			i++
-			for i < len(sql) {
-				if sql[i] == '"' {
-					buf.WriteByte(sql[i])
+			for i < len(rawSQL) {
+				if rawSQL[i] == '"' {
+					buf.WriteByte(rawSQL[i])
 					i++
-					if i < len(sql) && sql[i] == '"' {
-						buf.WriteByte(sql[i])
+					if i < len(rawSQL) && rawSQL[i] == '"' {
+						buf.WriteByte(rawSQL[i])
 						i++
 						continue
 					}
 					break
 				}
-				buf.WriteByte(sql[i])
+				buf.WriteByte(rawSQL[i])
 				i++
 			}
 		// Line comment — skip to end of line
-		case ch == '-' && i+1 < len(sql) && sql[i+1] == '-':
+		case ch == '-' && i+1 < len(rawSQL) && rawSQL[i+1] == '-':
 			i += 2
-			for i < len(sql) && sql[i] != '\n' {
+			for i < len(rawSQL) && rawSQL[i] != '\n' {
 				i++
 			}
 			buf.WriteByte(' ')
 		// Block comment — skip to closing */
-		case ch == '/' && i+1 < len(sql) && sql[i+1] == '*':
+		case ch == '/' && i+1 < len(rawSQL) && rawSQL[i+1] == '*':
 			i += 2
-			for i < len(sql) {
-				if sql[i] == '*' && i+1 < len(sql) && sql[i+1] == '/' {
+			for i < len(rawSQL) {
+				if rawSQL[i] == '*' && i+1 < len(rawSQL) && rawSQL[i+1] == '/' {
 					i += 2
 					break
 				}
@@ -329,7 +333,7 @@ func normalizeSQL(sql string) normalizeResult {
 		}
 	}
 	return normalizeResult{
-		sql:          collapseWhitespace(buf.String()),
+		normalized:   collapseWhitespace(buf.String()),
 		hasSemicolon: hasSemicolon,
 	}
 }
@@ -352,7 +356,7 @@ func checkReadOnly(readOnly bool, statement string) error {
 		return fmt.Errorf("statement blocked by read-only mode: multiple statements (semicolons) are not allowed")
 	}
 	for _, prefix := range readOnlyAllowedPrefixes {
-		if len(result.sql) >= len(prefix) && strings.EqualFold(result.sql[:len(prefix)], prefix) {
+		if len(result.normalized) >= len(prefix) && strings.EqualFold(result.normalized[:len(prefix)], prefix) {
 			return nil
 		}
 	}

@@ -224,11 +224,33 @@ func TestNormalizeSQL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := normalizeSQL(tt.in)
-			if got.sql != tt.wantSQL {
-				t.Errorf("normalizeSQL(%q).sql = %q, want %q", tt.in, got.sql, tt.wantSQL)
+			if got.normalized != tt.wantSQL {
+				t.Errorf("normalizeSQL(%q).sql = %q, want %q", tt.in, got.normalized, tt.wantSQL)
 			}
 			if got.hasSemicolon != tt.wantHasSemicolon {
 				t.Errorf("normalizeSQL(%q).hasSemicolon = %v, want %v", tt.in, got.hasSemicolon, tt.wantHasSemicolon)
+			}
+		})
+	}
+}
+
+func TestRunSQLAsUser_EmptyUser(t *testing.T) {
+	s := &Source{
+		Config:    Config{ReadOnlyMode: true},
+		userPools: make(map[string]*userPool),
+	}
+	tests := []struct {
+		name string
+		user string
+	}{
+		{name: "empty string", user: ""},
+		{name: "whitespace only", user: "   "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := s.RunSQLAsUser(context.Background(), "SELECT 1", nil, tt.user)
+			if err == nil {
+				t.Fatal("expected error for empty user, got nil")
 			}
 		})
 	}
