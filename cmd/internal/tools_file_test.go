@@ -1977,6 +1977,171 @@ func TestPrebuiltTools(t *testing.T) {
 	}
 }
 
+// TestPrebuiltTrinoParamValidation parses the actual trino.yaml prebuilt config
+// and exercises ParseParams against the real parameter definitions, ensuring the
+// allowedValues/excludedValues constraints reject unsafe inputs.
+func TestPrebuiltTrinoParamValidation(t *testing.T) {
+	trinoYAML, _ := prebuiltconfigs.Get("trino")
+	t.Setenv("TRINO_CATALOG", "hive")
+
+	ctx, err := testutils.ContextWithNewLogger()
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	toolsFile, err := parseToolsFile(ctx, trinoYAML)
+	if err != nil {
+		t.Fatalf("failed to parse trino prebuilt config: %v", err)
+	}
+
+	// Initialize select_query tool to get its real parameters
+	selectQueryCfg, ok := toolsFile.Tools["select_query"]
+	if !ok {
+		t.Fatal("select_query tool not found in parsed config")
+	}
+	selectQueryTool, err := selectQueryCfg.Initialize(nil)
+	if err != nil {
+		t.Fatalf("failed to initialize select_query: %v", err)
+	}
+	selectQueryParams := selectQueryTool.GetParameters()
+
+	// Initialize describe_table tool to get its real identifier parameter
+	describeTableCfg, ok := toolsFile.Tools["describe_table"]
+	if !ok {
+		t.Fatal("describe_table tool not found in parsed config")
+	}
+	describeTableTool, err := describeTableCfg.Initialize(nil)
+	if err != nil {
+		t.Fatalf("failed to initialize describe_table: %v", err)
+	}
+	describeTableParams := describeTableTool.GetParameters()
+
+	t.Run("table identifier allowlist", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			value   string
+			wantErr bool
+		}{
+			{name: "simple table", value: "users", wantErr: false},
+			{name: "schema.table", value: "default_schema.users", wantErr: false},
+			{name: "catalog.schema.table", value: "hive.default.users", wantErr: false},
+			{name: "underscores", value: "my_catalog.my_schema.my_table", wantErr: false},
+			{name: "rejects semicolon injection", value: "users; DROP TABLE t", wantErr: true},
+			{name: "rejects space", value: "users t", wantErr: true},
+			{name: "rejects subquery", value: "(SELECT 1)", wantErr: true},
+			{name: "rejects leading digit", value: "1table", wantErr: true},
+			{name: "rejects too many parts", value: "a.b.c.d", wantErr: true},
+			{name: "rejects hyphen", value: "my-table", wantErr: true},
+			{name: "rejects empty", value: "", wantErr: true},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := parameters.ParseParams(describeTableParams, map[string]any{"table": tt.value}, nil)
+				if (err != nil) != tt.wantErr {
+					t.Errorf("ParseParams(table=%q) error = %v, wantErr %v", tt.value, err, tt.wantErr)
+				}
+			})
+		}
+	})
+
+	t.Run("columns allowlist", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			value   string
+			wantErr bool
+		}{
+			{name: "wildcard", value: "*", wantErr: false},
+			{name: "single column", value: "col1", wantErr: false},
+			{name: "multiple columns", value: "col1, col2, col3", wantErr: false},
+			{name: "dot-qualified columns", value: "t.col1, t.col2", wantErr: false},
+			{name: "no spaces around comma", value: "col1,col2", wantErr: false},
+			{name: "rejects semicolon", value: "col1; DROP TABLE t", wantErr: true},
+			{name: "rejects subquery", value: "(SELECT 1) AS x", wantErr: true},
+			{name: "rejects UNION", value: "col1 UNION SELECT secret", wantErr: true},
+			{name: "rejects function call", value: "COUNT(*)", wantErr: true},
+			{name: "rejects empty", value: "", wantErr: true},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := parameters.ParseParams(selectQueryParams,
+					map[string]any{"table": "valid_table", "columns": tt.value, "limit": 100}, nil)
+				if (err != nil) != tt.wantErr {
+					t.Errorf("ParseParams(columns=%q) error = %v, wantErr %v", tt.value, err, tt.wantErr)
+				}
+			})
+		}
+	})
+
+	t.Run("limit validation", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			value   any
+			wantErr bool
+		}{
+			{name: "allows 1", value: 1, wantErr: false},
+			{name: "allows 1000", value: 1000, wantErr: false},
+			{name: "allows -1 (no limit)", value: -1, wantErr: false},
+			{name: "rejects 0", value: 0, wantErr: true},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := parameters.ParseParams(selectQueryParams,
+					map[string]any{"table": "valid_table", "columns": "*", "limit": tt.value}, nil)
+				if (err != nil) != tt.wantErr {
+					t.Errorf("ParseParams(limit=%v) error = %v, wantErr %v", tt.value, err, tt.wantErr)
+				}
+			})
+		}
+	})
+}
+
+// TestPrebuiltTrinoMaxLimitOverride verifies that TRINO_SELECT_QUERY_MAX_LIMIT
+// env var correctly overrides the max limit constraint.
+func TestPrebuiltTrinoMaxLimitOverride(t *testing.T) {
+	trinoYAML, _ := prebuiltconfigs.Get("trino")
+	t.Setenv("TRINO_CATALOG", "hive")
+	t.Setenv("TRINO_SELECT_QUERY_MAX_LIMIT", "500")
+
+	ctx, err := testutils.ContextWithNewLogger()
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	toolsFile, err := parseToolsFile(ctx, trinoYAML)
+	if err != nil {
+		t.Fatalf("failed to parse trino prebuilt config: %v", err)
+	}
+
+	selectQueryCfg, ok := toolsFile.Tools["select_query"]
+	if !ok {
+		t.Fatal("select_query tool not found")
+	}
+	selectQueryTool, err := selectQueryCfg.Initialize(nil)
+	if err != nil {
+		t.Fatalf("failed to initialize select_query: %v", err)
+	}
+	params := selectQueryTool.GetParameters()
+
+	tests := []struct {
+		name    string
+		value   any
+		wantErr bool
+	}{
+		{name: "allows at new max", value: 500, wantErr: false},
+		{name: "rejects over new max", value: 501, wantErr: true},
+		{name: "allows under new max", value: 100, wantErr: false},
+		{name: "still rejects 0", value: 0, wantErr: true},
+		{name: "still allows -1", value: -1, wantErr: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := parameters.ParseParams(params,
+				map[string]any{"table": "valid_table", "columns": "*", "limit": tt.value}, nil)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseParams(limit=%v) error = %v, wantErr %v", tt.value, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestMergeToolsFiles(t *testing.T) {
 	file1 := ToolsFile{
 		Sources:         server.SourceConfigs{"source1": httpsrc.Config{Name: "source1"}},

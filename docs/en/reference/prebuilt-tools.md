@@ -848,6 +848,20 @@ See [Usage Examples](../reference/cli.md#examples).
         `select_query` (Default: 1000). Set to -1 for no limit.
     *   `TRINO_SELECT_QUERY_MAX_LIMIT`: (Optional) Maximum allowed row limit for
         `select_query` (Default: 10000).
+*   **Security:**
+    *   Read-only mode (on by default) strips SQL comments, rejects multi-statement
+        SQL, and enforces a statement prefix allowlist. For full protection, also
+        configure Trino-side role-based access control.
+    *   Identifier parameters (catalog, schema, table) are validated against a
+        strict allowlist regex (`[a-zA-Z_][a-zA-Z0-9_]*`, optionally dot-separated
+        for FQNs).
+    *   The `columns` parameter uses an allowlist regex restricting input to `*` or
+        comma-separated identifier names (e.g. `col1, col2`, `t.col1`). Expressions,
+        subqueries, and function calls are rejected.
+    *   The `query` parameter (EXPLAIN tool) rejects semicolons and SQL comment
+        syntax via `excludedValues`.
+    *   Per-user identity propagation (`TRINO_USE_CLIENT_AUTH`) requires an upstream
+        authenticating proxy to set the trusted header.
 *   **Tools:**
     *   `list_catalogs`: Lists all catalogs in the Trino cluster.
     *   `list_schemas`: Lists all schemas in a given catalog.

@@ -160,6 +160,7 @@ func TestUseClientAuthorization(t *testing.T) {
 		{name: "enabled with True uses default header", useClientAuth: "True", wantRequired: true, wantHeaderName: "X-Authenticated-User"},
 		{name: "enabled with custom header", useClientAuth: "X-Authenticated-User", wantRequired: true, wantHeaderName: "X-Authenticated-User"},
 		{name: "enabled with another header", useClientAuth: "X-Remote-User", wantRequired: true, wantHeaderName: "X-Remote-User"},
+		{name: "trims whitespace from custom header", useClientAuth: "  X-Remote-User  ", wantRequired: true, wantHeaderName: "X-Remote-User"},
 	}
 
 	for _, tt := range tests {
@@ -210,6 +211,30 @@ func TestCheckReadOnly(t *testing.T) {
 		{name: "blocks CALL", readOnly: true, statement: "CALL system.runtime.kill_query('abc')", wantErr: true},
 		{name: "blocks USE", readOnly: true, statement: "USE hive.default", wantErr: true},
 		{name: "blocks RENAME", readOnly: true, statement: "RENAME TABLE t TO t2", wantErr: true},
+
+		// Comment-based bypass attempts
+		{name: "blocks line comment hiding DELETE", readOnly: true, statement: "-- SELECT\nDELETE FROM t", wantErr: true},
+		{name: "blocks block comment hiding DELETE", readOnly: true, statement: "/* SELECT */ DELETE FROM t", wantErr: true},
+		{name: "allows SELECT with trailing comment", readOnly: true, statement: "SELECT 1 -- comment", wantErr: false},
+		{name: "allows SELECT with block comment", readOnly: true, statement: "SELECT /* comment */ * FROM t", wantErr: false},
+
+		// Multi-statement bypass attempts
+		{name: "blocks semicolon multi-statement", readOnly: true, statement: "SELECT 1; DROP TABLE t", wantErr: true},
+		{name: "blocks semicolon at end with mutation", readOnly: true, statement: "SELECT 1; DELETE FROM t;", wantErr: true},
+		{name: "allows semicolon inside single-quoted literal", readOnly: true, statement: "SELECT * FROM t WHERE x = 'a;b'", wantErr: false},
+		{name: "allows semicolon inside double-quoted identifier", readOnly: true, statement: `SELECT * FROM t WHERE "col;name" = 1`, wantErr: false},
+		{name: "blocks semicolon outside quotes", readOnly: true, statement: "SELECT 'ok'; DROP TABLE t", wantErr: true},
+
+		// Combined comment + semicolon
+		{name: "blocks comment then semicolon", readOnly: true, statement: "-- safe\nSELECT 1; DROP TABLE t", wantErr: true},
+
+		// String-literal-aware comment stripping (issue: -- inside quotes must not be treated as comment)
+		{name: "blocks -- inside single quotes followed by semicolon", readOnly: true, statement: "SELECT '--'; DELETE FROM t", wantErr: true},
+		{name: "blocks /* inside single quotes followed by semicolon", readOnly: true, statement: "SELECT '/*'; DELETE FROM t", wantErr: true},
+		{name: "allows -- inside single-quoted string without semicolon", readOnly: true, statement: "SELECT '--' FROM t", wantErr: false},
+		{name: "allows /* inside single-quoted string without semicolon", readOnly: true, statement: "SELECT '/* not a comment */' FROM t", wantErr: false},
+		{name: "blocks block comment hiding mutation outside quotes", readOnly: true, statement: "SELECT 'ok' /* legit */ ; DELETE FROM t", wantErr: true},
+		{name: "handles escaped single quotes", readOnly: true, statement: "SELECT 'it''s fine' FROM t", wantErr: false},
 	}
 
 	for _, tt := range tests {
@@ -217,6 +242,59 @@ func TestCheckReadOnly(t *testing.T) {
 			err := CheckReadOnly(tt.readOnly, tt.statement)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("CheckReadOnly(%v, %q) error = %v, wantErr %v", tt.readOnly, tt.statement, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestNormalizeSQL(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "no comments", in: "SELECT * FROM t", want: "SELECT * FROM t"},
+		{name: "line comment", in: "SELECT 1 -- comment", want: "SELECT 1"},
+		{name: "line comment before statement", in: "-- comment\nSELECT 1", want: "SELECT 1"},
+		{name: "block comment", in: "SELECT /* inline */ 1", want: "SELECT 1"},
+		{name: "block comment before statement", in: "/* header */ SELECT 1", want: "SELECT 1"},
+		{name: "multiline block comment", in: "/* line1\nline2 */ SELECT 1", want: "SELECT 1"},
+		{name: "multiple comments", in: "-- first\n/* second */ SELECT -- third\n1", want: "SELECT 1"},
+		{name: "collapses whitespace", in: "  SELECT  *  FROM  t  ", want: "SELECT * FROM t"},
+		{name: "preserves -- inside single quotes", in: "SELECT '--' FROM t", want: "SELECT '--' FROM t"},
+		{name: "preserves /* inside single quotes", in: "SELECT '/* x */' FROM t", want: "SELECT '/* x */' FROM t"},
+		{name: "preserves -- inside double quotes", in: `SELECT "--" FROM t`, want: `SELECT "--" FROM t`},
+		{name: "handles escaped single quotes", in: "SELECT 'it''s' FROM t", want: "SELECT 'it''s' FROM t"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeSQL(tt.in)
+			if got != tt.want {
+				t.Errorf("normalizeSQL(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestContainsSemicolon(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{name: "no semicolon", in: "SELECT 1", want: false},
+		{name: "bare semicolon", in: "SELECT 1; DROP TABLE t", want: true},
+		{name: "semicolon in single quotes", in: "SELECT 'a;b'", want: false},
+		{name: "semicolon in double quotes", in: `SELECT "a;b"`, want: false},
+		{name: "semicolon outside after quote", in: "SELECT 'ok'; DROP TABLE t", want: true},
+		{name: "trailing semicolon", in: "SELECT 1;", want: true},
+		{name: "empty string", in: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := containsSemicolon(tt.in)
+			if got != tt.want {
+				t.Errorf("containsSemicolon(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
 	}

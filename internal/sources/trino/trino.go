@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -154,7 +155,7 @@ func (s *Source) GetAuthTokenHeaderName() string {
 	if v == "true" {
 		return defaultClientAuthHeader
 	}
-	return s.UseClientAuth
+	return strings.TrimSpace(s.UseClientAuth)
 }
 
 // getPoolForUser returns a cached *sql.DB connection pool for the given user.
@@ -250,14 +251,115 @@ var readOnlyAllowedPrefixes = []string{
 	"VALUES",
 }
 
+// normalizeSQL strips SQL comments (both line and block) while respecting
+// string literals, then collapses whitespace. This ensures that comment-like
+// sequences inside quoted strings (e.g. SELECT '--') are preserved.
+func normalizeSQL(sql string) string {
+	var buf strings.Builder
+	buf.Grow(len(sql))
+	i := 0
+	for i < len(sql) {
+		ch := sql[i]
+		switch {
+		// Single-quoted string literal — copy verbatim
+		case ch == '\'':
+			buf.WriteByte(ch)
+			i++
+			for i < len(sql) {
+				if sql[i] == '\'' {
+					buf.WriteByte(sql[i])
+					i++
+					// escaped quote ''
+					if i < len(sql) && sql[i] == '\'' {
+						buf.WriteByte(sql[i])
+						i++
+						continue
+					}
+					break
+				}
+				buf.WriteByte(sql[i])
+				i++
+			}
+		// Double-quoted identifier — copy verbatim
+		case ch == '"':
+			buf.WriteByte(ch)
+			i++
+			for i < len(sql) {
+				if sql[i] == '"' {
+					buf.WriteByte(sql[i])
+					i++
+					if i < len(sql) && sql[i] == '"' {
+						buf.WriteByte(sql[i])
+						i++
+						continue
+					}
+					break
+				}
+				buf.WriteByte(sql[i])
+				i++
+			}
+		// Line comment — skip to end of line
+		case ch == '-' && i+1 < len(sql) && sql[i+1] == '-':
+			i += 2
+			for i < len(sql) && sql[i] != '\n' {
+				i++
+			}
+			buf.WriteByte(' ')
+		// Block comment — skip to closing */
+		case ch == '/' && i+1 < len(sql) && sql[i+1] == '*':
+			i += 2
+			for i+1 < len(sql) {
+				if sql[i] == '*' && sql[i+1] == '/' {
+					i += 2
+					break
+				}
+				i++
+			}
+			buf.WriteByte(' ')
+		default:
+			buf.WriteByte(ch)
+			i++
+		}
+	}
+	return collapseWhitespace(buf.String())
+}
+
+var whitespaceRe = regexp.MustCompile(`\s+`)
+
+func collapseWhitespace(s string) string {
+	return strings.TrimSpace(whitespaceRe.ReplaceAllString(s, " "))
+}
+
+// containsSemicolon checks if SQL contains semicolons outside of string literals.
+func containsSemicolon(sql string) bool {
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(sql); i++ {
+		ch := sql[i]
+		switch {
+		case ch == '\'' && !inDouble:
+			inSingle = !inSingle
+		case ch == '"' && !inSingle:
+			inDouble = !inDouble
+		case ch == ';' && !inSingle && !inDouble:
+			return true
+		}
+	}
+	return false
+}
+
 // CheckReadOnly validates that a statement is read-only when read-only mode is enabled.
-// Returns an error if the statement is not allowed.
+// It strips SQL comments, rejects multi-statement SQL (semicolons outside string
+// literals), and checks for an allowed statement prefix.
 func CheckReadOnly(readOnly bool, statement string) error {
 	if !readOnly {
 		return nil
 	}
-	normalized := strings.TrimSpace(statement)
-	upper := strings.ToUpper(normalized)
+	cleaned := normalizeSQL(statement)
+	if containsSemicolon(cleaned) {
+		return fmt.Errorf("statement blocked by read-only mode: multiple statements (semicolons) are not allowed")
+	}
+	upper := strings.ToUpper(cleaned)
 	for _, prefix := range readOnlyAllowedPrefixes {
 		if strings.HasPrefix(upper, prefix) {
 			return nil

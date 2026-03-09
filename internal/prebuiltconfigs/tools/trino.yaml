@@ -43,6 +43,7 @@ tools:
         type: string
         description: "The catalog name to list schemas from."
         required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*$"]
 
   list_tables:
     kind: trino-sql
@@ -54,6 +55,7 @@ tools:
         type: string
         description: "The fully qualified schema name (catalog.schema) to list tables from."
         required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)?$"]
 
   describe_table:
     kind: trino-sql
@@ -65,6 +67,7 @@ tools:
         type: string
         description: "The fully qualified table name (catalog.schema.table) to describe."
         required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
 
   show_create_table:
     kind: trino-sql
@@ -76,6 +79,7 @@ tools:
         type: string
         description: "The fully qualified table name (catalog.schema.table) to show the CREATE statement for."
         required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
 
   show_stats:
     kind: trino-sql
@@ -87,6 +91,7 @@ tools:
         type: string
         description: "The fully qualified table name (catalog.schema.table) to show statistics for."
         required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
 
   query_plan:
     kind: trino-sql
@@ -98,6 +103,7 @@ tools:
         type: string
         description: "The SQL statement to explain (omit the EXPLAIN keyword)."
         required: true
+        excludedValues: [";", "--", "/\\*"]
 
   select_query:
     kind: trino-sql
@@ -109,10 +115,12 @@ tools:
         type: string
         description: "The fully qualified table name (catalog.schema.table) to query."
         required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
       - name: columns
         type: string
-        description: "Columns to select, e.g. '*' or 'col1, col2'."
+        description: "Columns to select, e.g. '*' or 'col1, col2'. Only simple column names are allowed (no expressions or subqueries)."
         default: "*"
+        allowedValues: ["^\\*$|^[a-zA-Z_][a-zA-Z0-9_.]*(\\s*,\\s*[a-zA-Z_][a-zA-Z0-9_.]*)*$"]
       - name: limit
         type: integer
         description: "Maximum number of rows to return. Use -1 for no limit."
