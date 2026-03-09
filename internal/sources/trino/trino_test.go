@@ -118,7 +118,7 @@ func TestUseClientAuthorization(t *testing.T) {
 	}
 }
 
-func TestCheckReadOnly(t *testing.T) {
+func Test_checkReadOnly(t *testing.T) {
 	tests := []struct {
 		name      string
 		readOnly  bool
@@ -181,9 +181,9 @@ func TestCheckReadOnly(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := CheckReadOnly(tt.readOnly, tt.statement)
+			err := checkReadOnly(tt.readOnly, tt.statement)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("CheckReadOnly(%v, %q) error = %v, wantErr %v", tt.readOnly, tt.statement, err, tt.wantErr)
+				t.Errorf("checkReadOnly(%v, %q) error = %v, wantErr %v", tt.readOnly, tt.statement, err, tt.wantErr)
 			}
 		})
 	}
@@ -216,6 +216,10 @@ func TestNormalizeSQL(t *testing.T) {
 		{name: "semicolon outside after quote", in: "SELECT 'ok'; DROP TABLE t", wantHasSemicolon: true, wantSQL: "SELECT 'ok'; DROP TABLE t"},
 		{name: "trailing semicolon", in: "SELECT 1;", wantHasSemicolon: true, wantSQL: "SELECT 1;"},
 		{name: "semicolon in comment", in: "SELECT 1 -- ; comment", wantHasSemicolon: false, wantSQL: "SELECT 1"},
+		// unterminated constructs
+		{name: "unterminated block comment", in: "SELECT 1 /* oops", wantSQL: "SELECT 1"},
+		{name: "unterminated single quote", in: "SELECT 'abc", wantSQL: "SELECT 'abc"},
+		{name: "unterminated double quote", in: `SELECT "abc`, wantSQL: `SELECT "abc`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

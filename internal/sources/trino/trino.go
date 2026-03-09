@@ -122,14 +122,6 @@ func (s *Source) ToConfig() sources.SourceConfig {
 	return s.Config
 }
 
-func (s *Source) TrinoDB() *sql.DB {
-	return s.Pool
-}
-
-func (s *Source) IsReadOnly() bool {
-	return s.ReadOnlyMode
-}
-
 const defaultClientAuthHeader = "X-Authenticated-User"
 
 // useClientAuthEnabled returns true if per-user identity propagation is enabled.
@@ -233,7 +225,7 @@ func (s *Source) getPoolForUser(user string) (*sql.DB, error) {
 // RunSQLAsUser executes a SQL statement as a specific user identity.
 // Used when per-user identity propagation is enabled (useClientAuth is set).
 func (s *Source) RunSQLAsUser(ctx context.Context, statement string, params []any, user string) (any, error) {
-	if err := CheckReadOnly(s.ReadOnlyMode, statement); err != nil {
+	if err := checkReadOnly(s.ReadOnlyMode, statement); err != nil {
 		return nil, err
 	}
 
@@ -319,8 +311,8 @@ func normalizeSQL(sql string) normalizeResult {
 		// Block comment — skip to closing */
 		case ch == '/' && i+1 < len(sql) && sql[i+1] == '*':
 			i += 2
-			for i+1 < len(sql) {
-				if sql[i] == '*' && sql[i+1] == '/' {
+			for i < len(sql) {
+				if sql[i] == '*' && i+1 < len(sql) && sql[i+1] == '/' {
 					i += 2
 					break
 				}
@@ -348,10 +340,10 @@ func collapseWhitespace(s string) string {
 	return strings.TrimSpace(whitespaceRe.ReplaceAllString(s, " "))
 }
 
-// CheckReadOnly validates that a statement is read-only when read-only mode is enabled.
+// checkReadOnly validates that a statement is read-only when read-only mode is enabled.
 // It strips SQL comments, rejects multi-statement SQL (semicolons outside string
 // literals), and checks for an allowed statement prefix.
-func CheckReadOnly(readOnly bool, statement string) error {
+func checkReadOnly(readOnly bool, statement string) error {
 	if !readOnly {
 		return nil
 	}
@@ -359,9 +351,8 @@ func CheckReadOnly(readOnly bool, statement string) error {
 	if result.hasSemicolon {
 		return fmt.Errorf("statement blocked by read-only mode: multiple statements (semicolons) are not allowed")
 	}
-	upper := strings.ToUpper(result.sql)
 	for _, prefix := range readOnlyAllowedPrefixes {
-		if strings.HasPrefix(upper, prefix) {
+		if len(result.sql) >= len(prefix) && strings.EqualFold(result.sql[:len(prefix)], prefix) {
 			return nil
 		}
 	}
@@ -369,7 +360,7 @@ func CheckReadOnly(readOnly bool, statement string) error {
 }
 
 func (s *Source) RunSQL(ctx context.Context, statement string, params []any) (any, error) {
-	if err := CheckReadOnly(s.ReadOnlyMode, statement); err != nil {
+	if err := checkReadOnly(s.ReadOnlyMode, statement); err != nil {
 		return nil, err
 	}
 	return executeQuery(ctx, s.Pool, statement, params)
@@ -401,7 +392,7 @@ func executeQuery(ctx context.Context, db *sql.DB, statement string, params []an
 		if err != nil {
 			return nil, fmt.Errorf("unable to parse row: %w", err)
 		}
-		vMap := make(map[string]any)
+		vMap := make(map[string]any, len(cols))
 		for i, name := range cols {
 			val := rawValues[i]
 			if val == nil {
