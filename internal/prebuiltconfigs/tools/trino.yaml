@@ -1,0 +1,133 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+sources:
+  trino-source:
+    kind: trino
+    host: ${TRINO_HOST:localhost}
+    port: ${TRINO_PORT:8080}
+    user: ${TRINO_USER:}
+    password: ${TRINO_PASSWORD:}
+    catalog: ${TRINO_CATALOG}
+    schema: ${TRINO_SCHEMA:default}
+    queryTimeout: ${TRINO_QUERY_TIMEOUT:}
+    sslEnabled: ${TRINO_SSL_ENABLED:false}
+    disableSslVerification: ${TRINO_DISABLE_SSL_VERIFICATION:false}
+    readOnlyMode: ${TRINO_READ_ONLY_MODE:true}
+    useClientAuth: ${TRINO_USE_CLIENT_AUTH:}
+
+tools:
+  list_catalogs:
+    kind: trino-sql
+    source: trino-source
+    description: List all catalogs available in the Trino cluster.
+    statement: SHOW CATALOGS
+
+  list_schemas:
+    kind: trino-sql
+    source: trino-source
+    description: List all schemas in a given Trino catalog.
+    statement: SHOW SCHEMAS FROM {{.catalog}}
+    templateParameters:
+      - name: catalog
+        type: string
+        description: "The catalog name to list schemas from."
+        required: true
+
+  list_tables:
+    kind: trino-sql
+    source: trino-source
+    description: List all tables in a given schema. Provide a fully qualified schema name (catalog.schema).
+    statement: SHOW TABLES FROM {{.schema}}
+    templateParameters:
+      - name: schema
+        type: string
+        description: "The fully qualified schema name (catalog.schema) to list tables from."
+        required: true
+
+  describe_table:
+    kind: trino-sql
+    source: trino-source
+    description: Describe the columns of a table. Provide a fully qualified table name (catalog.schema.table).
+    statement: DESCRIBE {{.table}}
+    templateParameters:
+      - name: table
+        type: string
+        description: "The fully qualified table name (catalog.schema.table) to describe."
+        required: true
+
+  show_create_table:
+    kind: trino-sql
+    source: trino-source
+    description: Show the CREATE TABLE statement for a table. Provide a fully qualified table name (catalog.schema.table).
+    statement: SHOW CREATE TABLE {{.table}}
+    templateParameters:
+      - name: table
+        type: string
+        description: "The fully qualified table name (catalog.schema.table) to show the CREATE statement for."
+        required: true
+
+  show_stats:
+    kind: trino-sql
+    source: trino-source
+    description: Show table statistics. Provide a fully qualified table name (catalog.schema.table).
+    statement: SHOW STATS FOR {{.table}}
+    templateParameters:
+      - name: table
+        type: string
+        description: "The fully qualified table name (catalog.schema.table) to show statistics for."
+        required: true
+
+  query_plan:
+    kind: trino-sql
+    source: trino-source
+    description: "Show the execution plan for a SQL query without executing it. Provide the SQL statement (omit the EXPLAIN keyword)."
+    statement: EXPLAIN {{.query}}
+    templateParameters:
+      - name: query
+        type: string
+        description: "The SQL statement to explain (omit the EXPLAIN keyword)."
+        required: true
+
+  select_query:
+    kind: trino-sql
+    source: trino-source
+    description: "Execute a SELECT query on a table. Provide a fully qualified table name (catalog.schema.table), columns to select, and an optional row limit. Set limit to -1 to return all rows."
+    statement: "SELECT {{.columns}} FROM {{.table}}{{if ne .limit -1}} LIMIT {{.limit}}{{end}}"
+    templateParameters:
+      - name: table
+        type: string
+        description: "The fully qualified table name (catalog.schema.table) to query."
+        required: true
+      - name: columns
+        type: string
+        description: "Columns to select, e.g. '*' or 'col1, col2'."
+        default: "*"
+      - name: limit
+        type: integer
+        description: "Maximum number of rows to return. Use -1 for no limit."
+        default: ${TRINO_SELECT_QUERY_DEFAULT_LIMIT:1000}
+        minValue: -1
+        maxValue: ${TRINO_SELECT_QUERY_MAX_LIMIT:10000}
+        excludedValues: ["^0$"]
+
+toolsets:
+  trino_tools:
+    - list_catalogs
+    - list_schemas
+    - list_tables
+    - describe_table
+    - show_create_table
+    - show_stats
+    - query_plan
+    - select_query

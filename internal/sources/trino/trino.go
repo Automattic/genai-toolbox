@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/goccy/go-yaml"
@@ -65,6 +67,8 @@ type Config struct {
 	SSLCertPath            string `yaml:"sslCertPath"`
 	SSLCert                string `yaml:"sslCert"`
 	DisableSslVerification bool   `yaml:"disableSslVerification"`
+	ReadOnlyMode           bool   `yaml:"readOnlyMode"`
+	UseClientAuth          string `yaml:"useClientAuth"`
 }
 
 func (r Config) SourceConfigType() string {
@@ -83,17 +87,30 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 	}
 
 	s := &Source{
-		Config: r,
-		Pool:   pool,
+		Config:    r,
+		Pool:      pool,
+		userPools: make(map[string]*userPool),
 	}
 	return s, nil
 }
 
 var _ sources.Source = &Source{}
 
+// maxUserPools limits the number of cached per-user connection pools.
+// When exceeded, one pool is evicted to make room.
+const maxUserPools = 100
+
+// userPool wraps a per-user *sql.DB with a last-accessed timestamp for LRU eviction.
+type userPool struct {
+	db       *sql.DB
+	lastUsed time.Time
+}
+
 type Source struct {
 	Config
-	Pool *sql.DB
+	Pool        *sql.DB
+	userPoolsMu sync.Mutex
+	userPools   map[string]*userPool // per-user connection pools
 }
 
 func (s *Source) SourceType() string {
@@ -108,8 +125,157 @@ func (s *Source) TrinoDB() *sql.DB {
 	return s.Pool
 }
 
+func (s *Source) IsReadOnly() bool {
+	return s.ReadOnlyMode
+}
+
+const defaultClientAuthHeader = "X-Authenticated-User"
+
+// useClientAuthEnabled returns true if per-user identity propagation is enabled.
+// Empty string and "false" mean disabled; "true" and any other value mean enabled.
+func useClientAuthEnabled(value string) bool {
+	v := strings.TrimSpace(strings.ToLower(value))
+	return v != "" && v != "false"
+}
+
+// UseClientAuthorization returns true if per-user identity propagation is enabled.
+func (s *Source) UseClientAuthorization() bool {
+	return useClientAuthEnabled(s.UseClientAuth)
+}
+
+// GetAuthTokenHeaderName returns the HTTP header name to read the user identity from.
+// "true" maps to the default header "X-Authenticated-User"; any other non-empty,
+// non-"false" value is treated as a custom header name.
+func (s *Source) GetAuthTokenHeaderName() string {
+	if !s.UseClientAuthorization() {
+		return "Authorization"
+	}
+	v := strings.TrimSpace(strings.ToLower(s.UseClientAuth))
+	if v == "true" {
+		return defaultClientAuthHeader
+	}
+	return s.UseClientAuth
+}
+
+// getPoolForUser returns a cached *sql.DB connection pool for the given user.
+// Creates a new pool on first access for that user. When the cache exceeds
+// maxUserPools, the least-recently-used pool is evicted.
+func (s *Source) getPoolForUser(user string) (*sql.DB, error) {
+	s.userPoolsMu.Lock()
+	if entry, ok := s.userPools[user]; ok {
+		entry.lastUsed = time.Now()
+		s.userPoolsMu.Unlock()
+		return entry.db, nil
+	}
+	s.userPoolsMu.Unlock()
+
+	dsn, err := buildTrinoDSN(s.Host, s.Port, user, "", s.Catalog, s.Schema, s.QueryTimeout, "", s.KerberosEnabled, s.SSLEnabled, s.SSLCertPath, s.SSLCert)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build per-user DSN: %w", err)
+	}
+
+	// Reuse the custom client registered at source init for SSL verification bypass
+	if s.DisableSslVerification {
+		clientName := fmt.Sprintf("insecure_trino_client_%s", s.Name)
+		dsn = fmt.Sprintf("%s&custom_client=%s", dsn, clientName)
+	}
+
+	db, err := sql.Open("trino", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open per-user connection: %w", err)
+	}
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxLifetime(time.Hour)
+
+	s.userPoolsMu.Lock()
+
+	// Double-check: another goroutine may have created it while we built the pool
+	if existing, ok := s.userPools[user]; ok {
+		existing.lastUsed = time.Now()
+		s.userPoolsMu.Unlock()
+		db.Close()
+		return existing.db, nil
+	}
+
+	// Evict the least-recently-used pool if at capacity.
+	var evicted *sql.DB
+	if len(s.userPools) >= maxUserPools {
+		var lruKey string
+		var lruTime time.Time
+		for k, v := range s.userPools {
+			if lruKey == "" || v.lastUsed.Before(lruTime) {
+				lruKey = k
+				lruTime = v.lastUsed
+			}
+		}
+		evicted = s.userPools[lruKey].db
+		delete(s.userPools, lruKey)
+	}
+
+	s.userPools[user] = &userPool{db: db, lastUsed: time.Now()}
+	s.userPoolsMu.Unlock()
+
+	// Close evicted pool outside the lock. sql.DB.Close() drains in-flight
+	// queries before returning, so this runs in a goroutine to avoid blocking
+	// the caller.
+	if evicted != nil {
+		go evicted.Close()
+	}
+
+	return db, nil
+}
+
+// RunSQLAsUser executes a SQL statement as a specific user identity.
+// Used when per-user identity propagation is enabled (useClientAuth is set).
+func (s *Source) RunSQLAsUser(ctx context.Context, statement string, params []any, user string) (any, error) {
+	if err := CheckReadOnly(s.ReadOnlyMode, statement); err != nil {
+		return nil, err
+	}
+
+	pool, err := s.getPoolForUser(user)
+	if err != nil {
+		return nil, err
+	}
+	return executeQuery(ctx, pool, statement, params)
+}
+
+// readOnlyAllowedPrefixes are the SQL statement prefixes allowed in read-only mode.
+var readOnlyAllowedPrefixes = []string{
+	"SELECT",
+	"WITH",
+	"SHOW",
+	"DESCRIBE",
+	"EXPLAIN",
+	"VALUES",
+}
+
+// CheckReadOnly validates that a statement is read-only when read-only mode is enabled.
+// Returns an error if the statement is not allowed.
+func CheckReadOnly(readOnly bool, statement string) error {
+	if !readOnly {
+		return nil
+	}
+	normalized := strings.TrimSpace(statement)
+	upper := strings.ToUpper(normalized)
+	for _, prefix := range readOnlyAllowedPrefixes {
+		if strings.HasPrefix(upper, prefix) {
+			return nil
+		}
+	}
+	return fmt.Errorf("statement blocked by read-only mode: only SELECT, WITH, SHOW, DESCRIBE, EXPLAIN, and VALUES statements are allowed")
+}
+
 func (s *Source) RunSQL(ctx context.Context, statement string, params []any) (any, error) {
-	results, err := s.TrinoDB().QueryContext(ctx, statement, params...)
+	if err := CheckReadOnly(s.ReadOnlyMode, statement); err != nil {
+		return nil, err
+	}
+	return executeQuery(ctx, s.Pool, statement, params)
+}
+
+// executeQuery runs a SQL statement against a given *sql.DB and returns the results.
+func executeQuery(ctx context.Context, db *sql.DB, statement string, params []any) (any, error) {
+	results, err := db.QueryContext(ctx, statement, params...)
 	if err != nil {
 		return nil, fmt.Errorf("unable to execute query: %w", err)
 	}

@@ -41,6 +41,8 @@ user: ${TRINO_USER}  # Optional for anonymous access
 password: ${TRINO_PASSWORD}  # Optional
 catalog: hive
 schema: default
+readOnlyMode: true
+useClientAuth: X-Authenticated-User
 ```
 
 {{< notice tip >}}
@@ -66,3 +68,5 @@ instead of hardcoding your secrets into the configuration file.
 | disableSslVerification | boolean  |    false     | Skip SSL/TLS certificate verification (default: false)                       |
 | sslCertPath            |  string  |    false     | Path to a custom SSL/TLS certificate file                                    |
 | sslCert                |  string  |    false     | Custom SSL/TLS certificate content                                           |
+| readOnlyMode           | boolean  |    false     | Block DML/DDL statements, allowing only SELECT, WITH, SHOW, DESCRIBE, EXPLAIN, and VALUES (default: false) |
+| useClientAuth          |  string  |    false     | HTTP header name to read per-user identity from (e.g. "X-Authenticated-User"). When set, the header value is forwarded to Trino as the query user. When empty, per-user mode is disabled and the static `user` config is used. |

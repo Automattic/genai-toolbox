@@ -826,6 +826,39 @@ See [Usage Examples](../reference/cli.md#examples).
     *   `execute_sql`: Executes a SQL query.
     *   `list_tables`: Lists tables in the database.
 
+## Trino
+
+*   `--prebuilt` value: `trino`
+*   **Environment Variables:**
+    *   `TRINO_HOST`: (Optional) The Trino coordinator hostname (Default: localhost).
+    *   `TRINO_PORT`: (Optional) The Trino coordinator port (Default: 8080).
+    *   `TRINO_USER`: (Optional) The username for authentication.
+    *   `TRINO_PASSWORD`: (Optional) The password for authentication.
+    *   `TRINO_CATALOG`: The default catalog to use for queries.
+    *   `TRINO_SCHEMA`: (Optional) The default schema (Default: default).
+    *   `TRINO_QUERY_TIMEOUT`: (Optional) Query timeout duration (e.g. "30m").
+    *   `TRINO_SSL_ENABLED`: (Optional) Enable SSL/TLS (Default: false).
+    *   `TRINO_DISABLE_SSL_VERIFICATION`: (Optional) Skip SSL certificate
+        verification (Default: false).
+    *   `TRINO_USE_CLIENT_AUTH`: (Optional) HTTP header name for per-user identity
+        propagation (e.g. "X-Authenticated-User"). When set, the header value is
+        forwarded to Trino as the query user.
+    *   `TRINO_READ_ONLY_MODE`: (Optional) Block DML/DDL statements (Default: true).
+    *   `TRINO_SELECT_QUERY_DEFAULT_LIMIT`: (Optional) Default row limit for
+        `select_query` (Default: 1000). Set to -1 for no limit.
+    *   `TRINO_SELECT_QUERY_MAX_LIMIT`: (Optional) Maximum allowed row limit for
+        `select_query` (Default: 10000).
+*   **Tools:**
+    *   `list_catalogs`: Lists all catalogs in the Trino cluster.
+    *   `list_schemas`: Lists all schemas in a given catalog.
+    *   `list_tables`: Lists all tables in a given schema.
+    *   `describe_table`: Describes the columns of a table.
+    *   `show_create_table`: Shows the CREATE TABLE statement for a table.
+    *   `show_stats`: Shows table statistics.
+    *   `query_plan`: Shows the execution plan for a SQL query.
+    *   `select_query`: Executes a SELECT query on a table with configurable
+        columns and row limit. Use limit=-1 to return all rows.
+
 ## Neo4j
 
 *   `--prebuilt` value: `neo4j`

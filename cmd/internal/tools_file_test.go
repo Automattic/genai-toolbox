@@ -1494,6 +1494,7 @@ func TestPrebuiltTools(t *testing.T) {
 	dataproc_config, _ := prebuiltconfigs.Get("dataproc")
 	cloudhealthcare_config, _ := prebuiltconfigs.Get("cloud-healthcare")
 	snowflake_config, _ := prebuiltconfigs.Get("snowflake")
+	trino_config, _ := prebuiltconfigs.Get("trino")
 
 	// Set environment variables
 	t.Setenv("API_KEY", "your_api_key")
@@ -1607,6 +1608,8 @@ func TestPrebuiltTools(t *testing.T) {
 	t.Setenv("SNOWFLAKE_SCHEMA", "your_schema")
 	t.Setenv("SNOWFLAKE_WAREHOUSE", "your_wh")
 	t.Setenv("SNOWFLAKE_ROLE", "your_role")
+
+	t.Setenv("TRINO_CATALOG", "hive")
 
 	ctx, err := testutils.ContextWithNewLogger()
 	if err != nil {
@@ -1942,6 +1945,16 @@ func TestPrebuiltTools(t *testing.T) {
 				"snowflake_tools": tools.ToolsetConfig{
 					Name:      "snowflake_tools",
 					ToolNames: []string{"execute_sql", "list_tables"},
+				},
+			},
+		},
+		{
+			name: "Trino prebuilt tools",
+			in:   trino_config,
+			wantToolset: server.ToolsetConfigs{
+				"trino_tools": tools.ToolsetConfig{
+					Name:      "trino_tools",
+					ToolNames: []string{"list_catalogs", "list_schemas", "list_tables", "describe_table", "show_create_table", "show_stats", "query_plan", "select_query"},
 				},
 			},
 		},

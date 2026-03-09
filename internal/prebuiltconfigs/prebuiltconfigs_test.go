@@ -56,6 +56,7 @@ var expectedToolSources = []string{
 	"spanner-postgres",
 	"spanner",
 	"sqlite",
+	"trino",
 }
 
 func TestGetPrebuiltSources(t *testing.T) {
@@ -231,6 +232,10 @@ func TestGetPrebuiltTool(t *testing.T) {
 	}
 	if len(snowflake_config) <= 0 {
 		t.Fatalf("unexpected error: could not fetch snowflake prebuilt tools yaml")
+	}
+	trino_config := getOrFatal(t, "trino")
+	if len(trino_config) <= 0 {
+		t.Fatalf("unexpected error: could not fetch trino prebuilt tools yaml")
 	}
 }
 
