@@ -16,7 +16,6 @@ package trinosql
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net/http"
 
@@ -45,7 +44,6 @@ func newConfig(ctx context.Context, name string, decoder *yaml.Decoder) (tools.T
 }
 
 type compatibleSource interface {
-	TrinoDB() *sql.DB
 	RunSQL(context.Context, string, []any) (any, error)
 	RunSQLAsUser(context.Context, string, []any, string) (any, error)
 	UseClientAuthorization() bool

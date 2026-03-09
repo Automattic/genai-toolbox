@@ -26,114 +26,56 @@ import (
 
 func TestBuildTrinoDSN(t *testing.T) {
 	tests := []struct {
-		name            string
-		host            string
-		port            string
-		user            string
-		password        string
-		catalog         string
-		schema          string
-		queryTimeout    string
-		accessToken     string
-		kerberosEnabled bool
-		sslEnabled      bool
-		sslCertPath     string
-		sslCert         string
-		want            string
-		wantErr         bool
+		name    string
+		cfg     Config
+		want    string
+		wantErr bool
 	}{
 		{
-			name:    "basic configuration",
-			host:    "localhost",
-			port:    "8080",
-			user:    "testuser",
-			catalog: "hive",
-			schema:  "default",
-			want:    "http://testuser@localhost:8080?catalog=hive&schema=default",
-			wantErr: false,
+			name: "basic configuration",
+			cfg:  Config{Host: "localhost", Port: "8080", User: "testuser", Catalog: "hive", Schema: "default"},
+			want: "http://testuser@localhost:8080?catalog=hive&schema=default",
 		},
 		{
-			name:        "with SSL cert path and cert",
-			host:        "localhost",
-			port:        "8443",
-			user:        "testuser",
-			catalog:     "hive",
-			schema:      "default",
-			sslEnabled:  true,
-			sslCertPath: "/path/to/cert.pem",
-			sslCert:     "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n",
-			want:        "https://testuser@localhost:8443?catalog=hive&schema=default&sslCert=-----BEGIN+CERTIFICATE-----%0A...%0A-----END+CERTIFICATE-----%0A&sslCertPath=%2Fpath%2Fto%2Fcert.pem",
-			wantErr:     false,
+			name: "with SSL cert path and cert",
+			cfg:  Config{Host: "localhost", Port: "8443", User: "testuser", Catalog: "hive", Schema: "default", SSLEnabled: true, SSLCertPath: "/path/to/cert.pem", SSLCert: "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"},
+			want: "https://testuser@localhost:8443?catalog=hive&schema=default&sslCert=-----BEGIN+CERTIFICATE-----%0A...%0A-----END+CERTIFICATE-----%0A&sslCertPath=%2Fpath%2Fto%2Fcert.pem",
 		},
 		{
-			name:     "with password",
-			host:     "localhost",
-			port:     "8080",
-			user:     "testuser",
-			password: "testpass",
-			catalog:  "hive",
-			schema:   "default",
-			want:     "http://testuser:testpass@localhost:8080?catalog=hive&schema=default",
-			wantErr:  false,
+			name: "with password",
+			cfg:  Config{Host: "localhost", Port: "8080", User: "testuser", Password: "testpass", Catalog: "hive", Schema: "default"},
+			want: "http://testuser:testpass@localhost:8080?catalog=hive&schema=default",
 		},
 		{
-			name:       "with SSL",
-			host:       "localhost",
-			port:       "8443",
-			user:       "testuser",
-			catalog:    "hive",
-			schema:     "default",
-			sslEnabled: true,
-			want:       "https://testuser@localhost:8443?catalog=hive&schema=default",
-			wantErr:    false,
+			name: "with SSL",
+			cfg:  Config{Host: "localhost", Port: "8443", User: "testuser", Catalog: "hive", Schema: "default", SSLEnabled: true},
+			want: "https://testuser@localhost:8443?catalog=hive&schema=default",
 		},
 		{
-			name:        "with access token",
-			host:        "localhost",
-			port:        "8080",
-			user:        "testuser",
-			catalog:     "hive",
-			schema:      "default",
-			accessToken: "jwt-token-here",
-			want:        "http://testuser@localhost:8080?accessToken=jwt-token-here&catalog=hive&schema=default",
-			wantErr:     false,
+			name: "with access token",
+			cfg:  Config{Host: "localhost", Port: "8080", User: "testuser", Catalog: "hive", Schema: "default", AccessToken: "jwt-token-here"},
+			want: "http://testuser@localhost:8080?accessToken=jwt-token-here&catalog=hive&schema=default",
 		},
 		{
-			name:            "with kerberos",
-			host:            "localhost",
-			port:            "8080",
-			user:            "testuser",
-			catalog:         "hive",
-			schema:          "default",
-			kerberosEnabled: true,
-			want:            "http://testuser@localhost:8080?KerberosEnabled=true&catalog=hive&schema=default",
-			wantErr:         false,
+			name: "with kerberos",
+			cfg:  Config{Host: "localhost", Port: "8080", User: "testuser", Catalog: "hive", Schema: "default", KerberosEnabled: true},
+			want: "http://testuser@localhost:8080?KerberosEnabled=true&catalog=hive&schema=default",
 		},
 		{
-			name:         "with query timeout",
-			host:         "localhost",
-			port:         "8080",
-			user:         "testuser",
-			catalog:      "hive",
-			schema:       "default",
-			queryTimeout: "30m",
-			want:         "http://testuser@localhost:8080?catalog=hive&queryTimeout=30m&schema=default",
-			wantErr:      false,
+			name: "with query timeout",
+			cfg:  Config{Host: "localhost", Port: "8080", User: "testuser", Catalog: "hive", Schema: "default", QueryTimeout: "30m"},
+			want: "http://testuser@localhost:8080?catalog=hive&queryTimeout=30m&schema=default",
 		},
 		{
-			name:    "anonymous access (empty user)",
-			host:    "localhost",
-			port:    "8080",
-			catalog: "hive",
-			schema:  "default",
-			want:    "http://localhost:8080?catalog=hive&schema=default",
-			wantErr: false,
+			name: "anonymous access (empty user)",
+			cfg:  Config{Host: "localhost", Port: "8080", Catalog: "hive", Schema: "default"},
+			want: "http://localhost:8080?catalog=hive&schema=default",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildTrinoDSN(tt.host, tt.port, tt.user, tt.password, tt.catalog, tt.schema, tt.queryTimeout, tt.accessToken, tt.kerberosEnabled, tt.sslEnabled, tt.sslCertPath, tt.sslCert)
+			got, err := buildTrinoDSN(tt.cfg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("buildTrinoDSN() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -249,52 +191,40 @@ func TestCheckReadOnly(t *testing.T) {
 
 func TestNormalizeSQL(t *testing.T) {
 	tests := []struct {
-		name string
-		in   string
-		want string
+		name             string
+		in               string
+		wantSQL          string
+		wantHasSemicolon bool
 	}{
-		{name: "no comments", in: "SELECT * FROM t", want: "SELECT * FROM t"},
-		{name: "line comment", in: "SELECT 1 -- comment", want: "SELECT 1"},
-		{name: "line comment before statement", in: "-- comment\nSELECT 1", want: "SELECT 1"},
-		{name: "block comment", in: "SELECT /* inline */ 1", want: "SELECT 1"},
-		{name: "block comment before statement", in: "/* header */ SELECT 1", want: "SELECT 1"},
-		{name: "multiline block comment", in: "/* line1\nline2 */ SELECT 1", want: "SELECT 1"},
-		{name: "multiple comments", in: "-- first\n/* second */ SELECT -- third\n1", want: "SELECT 1"},
-		{name: "collapses whitespace", in: "  SELECT  *  FROM  t  ", want: "SELECT * FROM t"},
-		{name: "preserves -- inside single quotes", in: "SELECT '--' FROM t", want: "SELECT '--' FROM t"},
-		{name: "preserves /* inside single quotes", in: "SELECT '/* x */' FROM t", want: "SELECT '/* x */' FROM t"},
-		{name: "preserves -- inside double quotes", in: `SELECT "--" FROM t`, want: `SELECT "--" FROM t`},
-		{name: "handles escaped single quotes", in: "SELECT 'it''s' FROM t", want: "SELECT 'it''s' FROM t"},
+		{name: "no comments", in: "SELECT * FROM t", wantSQL: "SELECT * FROM t"},
+		{name: "line comment", in: "SELECT 1 -- comment", wantSQL: "SELECT 1"},
+		{name: "line comment before statement", in: "-- comment\nSELECT 1", wantSQL: "SELECT 1"},
+		{name: "block comment", in: "SELECT /* inline */ 1", wantSQL: "SELECT 1"},
+		{name: "block comment before statement", in: "/* header */ SELECT 1", wantSQL: "SELECT 1"},
+		{name: "multiline block comment", in: "/* line1\nline2 */ SELECT 1", wantSQL: "SELECT 1"},
+		{name: "multiple comments", in: "-- first\n/* second */ SELECT -- third\n1", wantSQL: "SELECT 1"},
+		{name: "collapses whitespace", in: "  SELECT  *  FROM  t  ", wantSQL: "SELECT * FROM t"},
+		{name: "preserves -- inside single quotes", in: "SELECT '--' FROM t", wantSQL: "SELECT '--' FROM t"},
+		{name: "preserves /* inside single quotes", in: "SELECT '/* x */' FROM t", wantSQL: "SELECT '/* x */' FROM t"},
+		{name: "preserves -- inside double quotes", in: `SELECT "--" FROM t`, wantSQL: `SELECT "--" FROM t`},
+		{name: "handles escaped single quotes", in: "SELECT 'it''s' FROM t", wantSQL: "SELECT 'it''s' FROM t"},
+		// semicolon detection
+		{name: "no semicolon", in: "SELECT 1", wantHasSemicolon: false, wantSQL: "SELECT 1"},
+		{name: "bare semicolon", in: "SELECT 1; DROP TABLE t", wantHasSemicolon: true, wantSQL: "SELECT 1; DROP TABLE t"},
+		{name: "semicolon in single quotes", in: "SELECT 'a;b'", wantHasSemicolon: false, wantSQL: "SELECT 'a;b'"},
+		{name: "semicolon in double quotes", in: `SELECT "a;b"`, wantHasSemicolon: false, wantSQL: `SELECT "a;b"`},
+		{name: "semicolon outside after quote", in: "SELECT 'ok'; DROP TABLE t", wantHasSemicolon: true, wantSQL: "SELECT 'ok'; DROP TABLE t"},
+		{name: "trailing semicolon", in: "SELECT 1;", wantHasSemicolon: true, wantSQL: "SELECT 1;"},
+		{name: "semicolon in comment", in: "SELECT 1 -- ; comment", wantHasSemicolon: false, wantSQL: "SELECT 1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := normalizeSQL(tt.in)
-			if got != tt.want {
-				t.Errorf("normalizeSQL(%q) = %q, want %q", tt.in, got, tt.want)
+			if got.sql != tt.wantSQL {
+				t.Errorf("normalizeSQL(%q).sql = %q, want %q", tt.in, got.sql, tt.wantSQL)
 			}
-		})
-	}
-}
-
-func TestContainsSemicolon(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{name: "no semicolon", in: "SELECT 1", want: false},
-		{name: "bare semicolon", in: "SELECT 1; DROP TABLE t", want: true},
-		{name: "semicolon in single quotes", in: "SELECT 'a;b'", want: false},
-		{name: "semicolon in double quotes", in: `SELECT "a;b"`, want: false},
-		{name: "semicolon outside after quote", in: "SELECT 'ok'; DROP TABLE t", want: true},
-		{name: "trailing semicolon", in: "SELECT 1;", want: true},
-		{name: "empty string", in: "", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := containsSemicolon(tt.in)
-			if got != tt.want {
-				t.Errorf("containsSemicolon(%q) = %v, want %v", tt.in, got, tt.want)
+			if got.hasSemicolon != tt.wantHasSemicolon {
+				t.Errorf("normalizeSQL(%q).hasSemicolon = %v, want %v", tt.in, got.hasSemicolon, tt.wantHasSemicolon)
 			}
 		})
 	}

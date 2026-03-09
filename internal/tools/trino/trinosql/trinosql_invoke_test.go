@@ -16,7 +16,6 @@ package trinosql
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 
 	"github.com/googleapis/genai-toolbox/internal/sources"
@@ -28,22 +27,21 @@ import (
 // interface so it can be returned by the mock SourceProvider and cast
 // successfully inside GetCompatibleSource.
 type mockTrinoSource struct {
-	useClientAuth   bool
-	authHeaderName  string
-	runSQLCalled    bool
+	useClientAuth      bool
+	authHeaderName     string
+	runSQLCalled       bool
 	runSQLAsUserCalled bool
-	lastStatement   string
-	lastParams      []any
-	lastUser        string
-	returnValue     any
-	returnErr       error
+	lastStatement      string
+	lastParams         []any
+	lastUser           string
+	returnValue        any
+	returnErr          error
 }
 
-func (m *mockTrinoSource) SourceType() string                { return "trino" }
-func (m *mockTrinoSource) ToConfig() sources.SourceConfig    { return nil }
-func (m *mockTrinoSource) TrinoDB() *sql.DB                  { return nil }
-func (m *mockTrinoSource) UseClientAuthorization() bool      { return m.useClientAuth }
-func (m *mockTrinoSource) GetAuthTokenHeaderName() string    { return m.authHeaderName }
+func (m *mockTrinoSource) SourceType() string             { return "trino" }
+func (m *mockTrinoSource) ToConfig() sources.SourceConfig { return nil }
+func (m *mockTrinoSource) UseClientAuthorization() bool   { return m.useClientAuth }
+func (m *mockTrinoSource) GetAuthTokenHeaderName() string { return m.authHeaderName }
 
 func (m *mockTrinoSource) RunSQL(ctx context.Context, stmt string, params []any) (any, error) {
 	m.runSQLCalled = true

@@ -16,7 +16,6 @@ package trinoexecutesql
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 
 	"github.com/googleapis/genai-toolbox/internal/sources"
@@ -38,7 +37,6 @@ type mockTrinoSource struct {
 
 func (m *mockTrinoSource) SourceType() string             { return "trino" }
 func (m *mockTrinoSource) ToConfig() sources.SourceConfig { return nil }
-func (m *mockTrinoSource) TrinoDB() *sql.DB               { return nil }
 func (m *mockTrinoSource) UseClientAuthorization() bool   { return m.useClientAuth }
 func (m *mockTrinoSource) GetAuthTokenHeaderName() string { return m.authHeaderName }
 

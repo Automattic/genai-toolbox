@@ -77,7 +77,7 @@ func (r Config) SourceConfigType() string {
 }
 
 func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.Source, error) {
-	pool, err := initTrinoConnectionPool(ctx, tracer, r.Name, r.Host, r.Port, r.User, r.Password, r.Catalog, r.Schema, r.QueryTimeout, r.AccessToken, r.KerberosEnabled, r.SSLEnabled, r.SSLCertPath, r.SSLCert, r.DisableSslVerification)
+	pool, err := initTrinoConnectionPool(ctx, tracer, r)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create pool: %w", err)
 	}
@@ -170,15 +170,18 @@ func (s *Source) getPoolForUser(user string) (*sql.DB, error) {
 	}
 	s.userPoolsMu.Unlock()
 
-	dsn, err := buildTrinoDSN(s.Host, s.Port, user, "", s.Catalog, s.Schema, s.QueryTimeout, "", s.KerberosEnabled, s.SSLEnabled, s.SSLCertPath, s.SSLCert)
+	perUserCfg := s.Config
+	perUserCfg.User = user
+	perUserCfg.Password = ""
+	perUserCfg.AccessToken = ""
+	dsn, err := buildTrinoDSN(perUserCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build per-user DSN: %w", err)
 	}
 
 	// Reuse the custom client registered at source init for SSL verification bypass
 	if s.DisableSslVerification {
-		clientName := fmt.Sprintf("insecure_trino_client_%s", s.Name)
-		dsn = fmt.Sprintf("%s&custom_client=%s", dsn, clientName)
+		dsn = fmt.Sprintf("%s&custom_client=%s", dsn, insecureClientName(s.Name))
 	}
 
 	db, err := sql.Open("trino", dsn)
@@ -251,12 +254,20 @@ var readOnlyAllowedPrefixes = []string{
 	"VALUES",
 }
 
+// normalizeResult holds the output of normalizeSQL: the cleaned SQL text and
+// whether a semicolon was found outside string literals and comments.
+type normalizeResult struct {
+	sql            string
+	hasSemicolon   bool
+}
+
 // normalizeSQL strips SQL comments (both line and block) while respecting
-// string literals, then collapses whitespace. This ensures that comment-like
-// sequences inside quoted strings (e.g. SELECT '--') are preserved.
-func normalizeSQL(sql string) string {
+// string literals, then collapses whitespace. It also detects semicolons
+// outside of quoted strings in a single pass.
+func normalizeSQL(sql string) normalizeResult {
 	var buf strings.Builder
 	buf.Grow(len(sql))
+	hasSemicolon := false
 	i := 0
 	for i < len(sql) {
 		ch := sql[i]
@@ -316,36 +327,25 @@ func normalizeSQL(sql string) string {
 				i++
 			}
 			buf.WriteByte(' ')
+		case ch == ';':
+			hasSemicolon = true
+			buf.WriteByte(ch)
+			i++
 		default:
 			buf.WriteByte(ch)
 			i++
 		}
 	}
-	return collapseWhitespace(buf.String())
+	return normalizeResult{
+		sql:          collapseWhitespace(buf.String()),
+		hasSemicolon: hasSemicolon,
+	}
 }
 
 var whitespaceRe = regexp.MustCompile(`\s+`)
 
 func collapseWhitespace(s string) string {
 	return strings.TrimSpace(whitespaceRe.ReplaceAllString(s, " "))
-}
-
-// containsSemicolon checks if SQL contains semicolons outside of string literals.
-func containsSemicolon(sql string) bool {
-	inSingle := false
-	inDouble := false
-	for i := 0; i < len(sql); i++ {
-		ch := sql[i]
-		switch {
-		case ch == '\'' && !inDouble:
-			inSingle = !inSingle
-		case ch == '"' && !inSingle:
-			inDouble = !inDouble
-		case ch == ';' && !inSingle && !inDouble:
-			return true
-		}
-	}
-	return false
 }
 
 // CheckReadOnly validates that a statement is read-only when read-only mode is enabled.
@@ -355,11 +355,11 @@ func CheckReadOnly(readOnly bool, statement string) error {
 	if !readOnly {
 		return nil
 	}
-	cleaned := normalizeSQL(statement)
-	if containsSemicolon(cleaned) {
+	result := normalizeSQL(statement)
+	if result.hasSemicolon {
 		return fmt.Errorf("statement blocked by read-only mode: multiple statements (semicolons) are not allowed")
 	}
-	upper := strings.ToUpper(cleaned)
+	upper := strings.ToUpper(result.sql)
 	for _, prefix := range readOnlyAllowedPrefixes {
 		if strings.HasPrefix(upper, prefix) {
 			return nil
@@ -426,13 +426,13 @@ func executeQuery(ctx context.Context, db *sql.DB, statement string, params []an
 	return out, nil
 }
 
-func initTrinoConnectionPool(ctx context.Context, tracer trace.Tracer, name, host, port, user, password, catalog, schema, queryTimeout, accessToken string, kerberosEnabled, sslEnabled bool, sslCertPath, sslCert string, disableSslVerification bool) (*sql.DB, error) {
+func initTrinoConnectionPool(ctx context.Context, tracer trace.Tracer, cfg Config) (*sql.DB, error) {
 	//nolint:all // Reassigned ctx
-	ctx, span := sources.InitConnectionSpan(ctx, tracer, SourceType, name)
+	ctx, span := sources.InitConnectionSpan(ctx, tracer, SourceType, cfg.Name)
 	defer span.End()
 
 	// Build Trino DSN
-	dsn, err := buildTrinoDSN(host, port, user, password, catalog, schema, queryTimeout, accessToken, kerberosEnabled, sslEnabled, sslCertPath, sslCert)
+	dsn, err := buildTrinoDSN(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build DSN: %w", err)
 	}
@@ -442,13 +442,13 @@ func initTrinoConnectionPool(ctx context.Context, tracer trace.Tracer, name, hos
 		return nil, fmt.Errorf("unable to get logger from ctx: %s", err)
 	}
 
-	if disableSslVerification {
-		logger.WarnContext(ctx, "SSL verification is disabled for trino source %s. This is an insecure setting and should not be used in production.\n", name)
+	if cfg.DisableSslVerification {
+		logger.WarnContext(ctx, "SSL verification is disabled for trino source %s. This is an insecure setting and should not be used in production.\n", cfg.Name)
 		tr := &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
 		client := &http.Client{Transport: tr}
-		clientName := fmt.Sprintf("insecure_trino_client_%s", name)
+		clientName := insecureClientName(cfg.Name)
 		if err := trinogo.RegisterCustomClient(clientName, client); err != nil {
 			return nil, fmt.Errorf("failed to register custom client: %w", err)
 		}
@@ -468,44 +468,48 @@ func initTrinoConnectionPool(ctx context.Context, tracer trace.Tracer, name, hos
 	return db, nil
 }
 
-func buildTrinoDSN(host, port, user, password, catalog, schema, queryTimeout, accessToken string, kerberosEnabled, sslEnabled bool, sslCertPath, sslCert string) (string, error) {
+func insecureClientName(sourceName string) string {
+	return fmt.Sprintf("insecure_trino_client_%s", sourceName)
+}
+
+func buildTrinoDSN(cfg Config) (string, error) {
 	// Build query parameters
 	query := url.Values{}
-	query.Set("catalog", catalog)
-	query.Set("schema", schema)
-	if queryTimeout != "" {
-		query.Set("queryTimeout", queryTimeout)
+	query.Set("catalog", cfg.Catalog)
+	query.Set("schema", cfg.Schema)
+	if cfg.QueryTimeout != "" {
+		query.Set("queryTimeout", cfg.QueryTimeout)
 	}
-	if accessToken != "" {
-		query.Set("accessToken", accessToken)
+	if cfg.AccessToken != "" {
+		query.Set("accessToken", cfg.AccessToken)
 	}
-	if kerberosEnabled {
+	if cfg.KerberosEnabled {
 		query.Set("KerberosEnabled", "true")
 	}
-	if sslCertPath != "" {
-		query.Set("sslCertPath", sslCertPath)
+	if cfg.SSLCertPath != "" {
+		query.Set("sslCertPath", cfg.SSLCertPath)
 	}
-	if sslCert != "" {
-		query.Set("sslCert", sslCert)
+	if cfg.SSLCert != "" {
+		query.Set("sslCert", cfg.SSLCert)
 	}
 
 	// Build URL
 	scheme := "http"
-	if sslEnabled {
+	if cfg.SSLEnabled {
 		scheme = "https"
 	}
 
 	u := &url.URL{
 		Scheme:   scheme,
-		Host:     fmt.Sprintf("%s:%s", host, port),
+		Host:     fmt.Sprintf("%s:%s", cfg.Host, cfg.Port),
 		RawQuery: query.Encode(),
 	}
 
 	// Only set user and password if not empty
-	if user != "" && password != "" {
-		u.User = url.UserPassword(user, password)
-	} else if user != "" {
-		u.User = url.User(user)
+	if cfg.User != "" && cfg.Password != "" {
+		u.User = url.UserPassword(cfg.User, cfg.Password)
+	} else if cfg.User != "" {
+		u.User = url.User(cfg.User)
 	}
 
 	return u.String(), nil
