@@ -16,6 +16,11 @@ package trino
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -234,25 +239,121 @@ func TestNormalizeSQL(t *testing.T) {
 	}
 }
 
-func TestRunSQLAsUser_EmptyUser(t *testing.T) {
-	s := &Source{
-		Config:    Config{ReadOnlyMode: true},
-		userPools: make(map[string]*userPool),
-	}
+func TestPrepareImpersonatedParams(t *testing.T) {
 	tests := []struct {
-		name string
-		user string
+		name     string
+		params   []any
+		user     string
+		wantUser string // expected value in the named arg
+		wantErr  bool
 	}{
-		{name: "empty string", user: ""},
-		{name: "whitespace only", user: "   "},
+		// Valid users
+		{name: "valid user appends named arg", user: "alice", wantUser: "alice"},
+		{name: "trims whitespace", user: "  alice  ", wantUser: "alice"},
+		{name: "user with dots and dashes", user: "alice.bob-test", wantUser: "alice.bob-test"},
+		{name: "user with underscores", user: "svc_account", wantUser: "svc_account"},
+		{name: "preserves existing params", user: "alice", params: []any{42}, wantUser: "alice"},
+		{name: "exactly 64 chars (max allowed)", user: "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", wantUser: "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+
+		// Invalid users — empty
+		{name: "empty string", user: "", wantErr: true},
+		{name: "whitespace only", user: "   ", wantErr: true},
+
+		// Invalid users — pattern mismatch
+		{name: "too short", user: "ab", wantErr: true},
+		{name: "starts with digit", user: "1alice", wantErr: true},
+		{name: "rejects uppercase", user: "Alice", wantErr: true},
+		{name: "contains space", user: "alice bob", wantErr: true},
+		{name: "contains slash", user: "alice/bob", wantErr: true},
+		{name: "65 chars exceeds max", user: "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := s.RunSQLAsUser(context.Background(), "SELECT 1", nil, tt.user)
-			if err == nil {
-				t.Fatal("expected error for empty user, got nil")
+			got, err := prepareImpersonatedParams(tt.params, tt.user)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			// The last element must be the sql.Named arg
+			last := got[len(got)-1]
+			named, ok := last.(sql.NamedArg)
+			if !ok {
+				t.Fatalf("last param is %T, want sql.NamedArg", last)
+			}
+			if named.Name != trinoUserHeader {
+				t.Errorf("named arg name = %q, want %q", named.Name, trinoUserHeader)
+			}
+			if named.Value != tt.wantUser {
+				t.Errorf("named arg value = %q, want %q", named.Value, tt.wantUser)
+			}
+
+			// Original params should be preserved before the named arg
+			for i, p := range tt.params {
+				if got[i] != p {
+					t.Errorf("params[%d] = %v, want %v", i, got[i], p)
+				}
+			}
+
+			// Result must be a fresh slice (no aliasing)
+			if len(tt.params) > 0 && &got[0] == &tt.params[0] {
+				t.Error("returned slice aliases input params backing array")
 			}
 		})
+	}
+}
+
+// TestTrinoDriverSendsImpersonationHeader verifies that the trino-go-client
+// actually sends X-Trino-User as an HTTP header when sql.Named("X-Trino-User", ...)
+// is passed as a query arg. This is a regression guard for client library upgrades.
+func TestTrinoDriverSendsImpersonationHeader(t *testing.T) {
+	var mu sync.Mutex
+	var capturedUser string
+
+	// Minimal fake Trino server that captures X-Trino-User and returns an empty result set.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if v := r.Header.Get("X-Trino-User"); v != "" {
+			capturedUser = v
+		}
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":      "test_query_1",
+			"infoUri": "http://localhost/query/test_query_1",
+			"stats": map[string]any{
+				"state":              "FINISHED",
+				"progressPercentage": 100.0,
+			},
+			"columns": []map[string]any{
+				{"name": "dummy", "type": "integer"},
+			},
+		})
+	}))
+	t.Cleanup(ts.Close)
+
+	db, err := sql.Open("trino", ts.URL+"?catalog=test&schema=default")
+	if err != nil {
+		t.Fatalf("failed to open trino connection: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	rows, err := db.Query("SELECT 1", sql.Named("X-Trino-User", "impersonated_user"))
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	rows.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if capturedUser != "impersonated_user" {
+		t.Errorf("X-Trino-User header = %q, want %q", capturedUser, "impersonated_user")
 	}
 }
 

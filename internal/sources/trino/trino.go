@@ -23,7 +23,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/goccy/go-yaml"
@@ -88,30 +87,17 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 	}
 
 	s := &Source{
-		Config:    r,
-		Pool:      pool,
-		userPools: make(map[string]*userPool),
+		Config: r,
+		Pool:   pool,
 	}
 	return s, nil
 }
 
 var _ sources.Source = &Source{}
 
-// maxUserPools limits the number of cached per-user connection pools.
-// When exceeded, one pool is evicted to make room.
-const maxUserPools = 100
-
-// userPool wraps a per-user *sql.DB with a last-accessed timestamp for LRU eviction.
-type userPool struct {
-	db       *sql.DB
-	lastUsed time.Time
-}
-
 type Source struct {
 	Config
-	Pool        *sql.DB
-	userPoolsMu sync.Mutex
-	userPools   map[string]*userPool // per-user connection pools
+	Pool *sql.DB
 }
 
 func (s *Source) SourceType() string {
@@ -123,6 +109,15 @@ func (s *Source) ToConfig() sources.SourceConfig {
 }
 
 const defaultClientAuthHeader = "X-Authenticated-User"
+
+// trinoUserHeader is the HTTP header the trino-go-client uses to set the
+// session user identity. Used with sql.Named to override per query.
+const trinoUserHeader = "X-Trino-User"
+
+// validUsernameRe matches allowed usernames for impersonation.
+// Constraining the pattern prevents malformed or injected identities from
+// reaching Trino, failing fast in MCP instead.
+var validUsernameRe = regexp.MustCompile(`^[a-z][a-z0-9._-]{2,63}$`)
 
 // useClientAuthEnabled returns true if per-user identity propagation is enabled.
 // Empty string and "false" mean disabled; "true" and any other value mean enabled.
@@ -150,95 +145,36 @@ func (s *Source) GetAuthTokenHeaderName() string {
 	return strings.TrimSpace(s.UseClientAuth)
 }
 
-// getPoolForUser returns a cached *sql.DB connection pool for the given user.
-// Creates a new pool on first access for that user. When the cache exceeds
-// maxUserPools, the least-recently-used pool is evicted.
-func (s *Source) getPoolForUser(user string) (*sql.DB, error) {
-	s.userPoolsMu.Lock()
-	if entry, ok := s.userPools[user]; ok {
-		entry.lastUsed = time.Now()
-		s.userPoolsMu.Unlock()
-		return entry.db, nil
-	}
-	s.userPoolsMu.Unlock()
-
-	perUserCfg := s.Config
-	perUserCfg.User = user
-	perUserCfg.Password = ""
-	perUserCfg.AccessToken = ""
-	dsn, err := buildTrinoDSN(perUserCfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build per-user DSN: %w", err)
-	}
-
-	// Reuse the custom client registered at source init for SSL verification bypass
-	if s.DisableSslVerification {
-		dsn = fmt.Sprintf("%s&custom_client=%s", dsn, insecureClientName(s.Name))
-	}
-
-	db, err := sql.Open("trino", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open per-user connection: %w", err)
-	}
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
-	db.SetConnMaxLifetime(time.Hour)
-
-	s.userPoolsMu.Lock()
-
-	// Double-check: another goroutine may have created it while we built the pool
-	if existing, ok := s.userPools[user]; ok {
-		existing.lastUsed = time.Now()
-		s.userPoolsMu.Unlock()
-		db.Close()
-		return existing.db, nil
-	}
-
-	// Evict the least-recently-used pool if at capacity.
-	var evicted *sql.DB
-	if len(s.userPools) >= maxUserPools {
-		var lruKey string
-		var lruTime time.Time
-		for k, v := range s.userPools {
-			if lruKey == "" || v.lastUsed.Before(lruTime) {
-				lruKey = k
-				lruTime = v.lastUsed
-			}
-		}
-		evicted = s.userPools[lruKey].db
-		delete(s.userPools, lruKey)
-	}
-
-	s.userPools[user] = &userPool{db: db, lastUsed: time.Now()}
-	s.userPoolsMu.Unlock()
-
-	// Close evicted pool outside the lock. sql.DB.Close() drains in-flight
-	// queries before returning, so this runs in a goroutine to avoid blocking
-	// the caller.
-	if evicted != nil {
-		go evicted.Close()
-	}
-
-	return db, nil
-}
-
-// RunSQLAsUser executes a SQL statement as a specific user identity.
-// Used when per-user identity propagation is enabled (useClientAuth is set).
-func (s *Source) RunSQLAsUser(ctx context.Context, statement string, params []any, user string) (any, error) {
+// prepareImpersonatedParams validates the user identity and returns a new
+// params slice with sql.Named("X-Trino-User", user) appended. The returned
+// slice is always a fresh allocation to avoid aliasing the caller's backing array.
+func prepareImpersonatedParams(params []any, user string) ([]any, error) {
 	user = strings.TrimSpace(user)
 	if user == "" {
 		return nil, fmt.Errorf("user identity is required for per-user query execution")
 	}
+	if !validUsernameRe.MatchString(user) {
+		return nil, fmt.Errorf("invalid user identity %q: must match %s", user, validUsernameRe.String())
+	}
+	out := make([]any, len(params)+1)
+	copy(out, params)
+	out[len(params)] = sql.Named(trinoUserHeader, user)
+	return out, nil
+}
 
+// RunSQLAsUser executes a SQL statement as a specific user identity.
+// The shared pool authenticates with service account credentials while
+// the trino-go-client's sql.Named("X-Trino-User", user) overrides the
+// session identity per query, enabling Trino impersonation.
+func (s *Source) RunSQLAsUser(ctx context.Context, statement string, params []any, user string) (any, error) {
 	if err := checkReadOnly(s.ReadOnlyMode, statement); err != nil {
 		return nil, err
 	}
-
-	pool, err := s.getPoolForUser(user)
+	params, err := prepareImpersonatedParams(params, user)
 	if err != nil {
 		return nil, err
 	}
-	return executeQuery(ctx, pool, statement, params)
+	return executeQuery(ctx, s.Pool, statement, params)
 }
 
 // readOnlyAllowedPrefixes are the SQL statement prefixes allowed in read-only mode.
