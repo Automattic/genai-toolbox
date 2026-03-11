@@ -41,6 +41,8 @@ user: ${TRINO_USER}  # Optional for anonymous access
 password: ${TRINO_PASSWORD}  # Optional
 catalog: hive
 schema: default
+readOnlyMode: true
+useClientAuth: X-Authenticated-User
 ```
 
 {{< notice tip >}}
@@ -66,3 +68,27 @@ instead of hardcoding your secrets into the configuration file.
 | disableSslVerification | boolean  |    false     | Skip SSL/TLS certificate verification (default: false)                       |
 | sslCertPath            |  string  |    false     | Path to a custom SSL/TLS certificate file                                    |
 | sslCert                |  string  |    false     | Custom SSL/TLS certificate content                                           |
+| readOnlyMode           | boolean  |    false     | Block DML/DDL statements, allowing only SELECT, WITH, SHOW, DESCRIBE, EXPLAIN, and VALUES (default: false) |
+| useClientAuth          |  string  |    false     | HTTP header name to read per-user identity from (e.g. "X-Authenticated-User"). When set, the header value is forwarded to Trino as the query user. When empty, per-user mode is disabled and the static `user` config is used. |
+
+## Security
+
+### Read-only mode
+
+When `readOnlyMode: true`, the Toolbox enforces a client-side allowlist before forwarding any SQL to Trino. The enforcement pipeline:
+
+1. **Comment stripping** — SQL comments (`--` line comments and `/* */` block comments) are removed before analysis.
+2. **Multi-statement rejection** — Semicolons outside string literals are rejected, blocking `SELECT 1; DROP TABLE t` style attacks.
+3. **Prefix allowlist** — After normalization, only statements starting with `SELECT`, `WITH`, `SHOW`, `DESCRIBE`, `EXPLAIN`, or `VALUES` are allowed.
+
+This is a best-effort client-side guard. For defense in depth, configure Trino-side role-based access control to restrict the user to read-only catalogs.
+
+### Per-user identity propagation
+
+When `useClientAuth` is set, each MCP/REST request must carry the user identity in the configured HTTP header. The Toolbox opens a separate Trino connection pool per user (capped at 100 with LRU eviction), so Trino sees the actual user principal and can enforce its own access policies.
+
+The trusted-header model assumes the header is set by an upstream authenticating proxy (e.g., nginx with LDAP/OAuth). Direct client access without a proxy would allow header spoofing.
+
+### Prebuilt tool template validation
+
+The prebuilt Trino config uses `allowedValues` regex on identifier parameters (catalog, schema, table) to restrict input to valid Trino identifiers (`[a-zA-Z_][a-zA-Z0-9_]*` optionally dot-separated). The `columns` parameter uses an allowlist regex restricting input to `*` or comma-separated identifier names (no expressions or subqueries). The `query` parameter (EXPLAIN tool) uses `excludedValues` to block semicolons and SQL comment syntax.

@@ -1494,6 +1494,7 @@ func TestPrebuiltTools(t *testing.T) {
 	dataproc_config, _ := prebuiltconfigs.Get("dataproc")
 	cloudhealthcare_config, _ := prebuiltconfigs.Get("cloud-healthcare")
 	snowflake_config, _ := prebuiltconfigs.Get("snowflake")
+	trino_config, _ := prebuiltconfigs.Get("trino")
 
 	// Set environment variables
 	t.Setenv("API_KEY", "your_api_key")
@@ -1607,6 +1608,8 @@ func TestPrebuiltTools(t *testing.T) {
 	t.Setenv("SNOWFLAKE_SCHEMA", "your_schema")
 	t.Setenv("SNOWFLAKE_WAREHOUSE", "your_wh")
 	t.Setenv("SNOWFLAKE_ROLE", "your_role")
+
+	t.Setenv("TRINO_CATALOG", "hive")
 
 	ctx, err := testutils.ContextWithNewLogger()
 	if err != nil {
@@ -1945,6 +1948,16 @@ func TestPrebuiltTools(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "Trino prebuilt tools",
+			in:   trino_config,
+			wantToolset: server.ToolsetConfigs{
+				"trino_tools": tools.ToolsetConfig{
+					Name:      "trino_tools",
+					ToolNames: []string{"execute_sql", "list_catalogs", "list_schemas", "list_tables", "describe_table", "show_create_table", "show_stats", "sample_table", "query_plan"},
+				},
+			},
+		},
 	}
 
 	for _, tc := range tcs {
@@ -1962,6 +1975,62 @@ func TestPrebuiltTools(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestPrebuiltTrinoParamValidation parses the actual trino.yaml prebuilt config
+// and exercises ParseParams against the real parameter definitions, ensuring the
+// allowedValues/excludedValues constraints reject unsafe inputs.
+func TestPrebuiltTrinoParamValidation(t *testing.T) {
+	trinoYAML, _ := prebuiltconfigs.Get("trino")
+	t.Setenv("TRINO_CATALOG", "hive")
+
+	ctx, err := testutils.ContextWithNewLogger()
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	toolsFile, err := parseToolsFile(ctx, trinoYAML)
+	if err != nil {
+		t.Fatalf("failed to parse trino prebuilt config: %v", err)
+	}
+
+	// Initialize describe_table tool to get its real identifier parameter
+	describeTableCfg, ok := toolsFile.Tools["describe_table"]
+	if !ok {
+		t.Fatal("describe_table tool not found in parsed config")
+	}
+	describeTableTool, err := describeTableCfg.Initialize(nil)
+	if err != nil {
+		t.Fatalf("failed to initialize describe_table: %v", err)
+	}
+	describeTableParams := describeTableTool.GetParameters()
+
+	t.Run("table identifier allowlist", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			value   string
+			wantErr bool
+		}{
+			{name: "simple table", value: "users", wantErr: false},
+			{name: "schema.table", value: "default_schema.users", wantErr: false},
+			{name: "catalog.schema.table", value: "hive.default.users", wantErr: false},
+			{name: "underscores", value: "my_catalog.my_schema.my_table", wantErr: false},
+			{name: "rejects semicolon injection", value: "users; DROP TABLE t", wantErr: true},
+			{name: "rejects space", value: "users t", wantErr: true},
+			{name: "rejects subquery", value: "(SELECT 1)", wantErr: true},
+			{name: "rejects leading digit", value: "1table", wantErr: true},
+			{name: "rejects too many parts", value: "a.b.c.d", wantErr: true},
+			{name: "rejects hyphen", value: "my-table", wantErr: true},
+			{name: "rejects empty", value: "", wantErr: true},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := parameters.ParseParams(describeTableParams, map[string]any{"table": tt.value}, nil)
+				if (err != nil) != tt.wantErr {
+					t.Errorf("ParseParams(table=%q) error = %v, wantErr %v", tt.value, err, tt.wantErr)
+				}
+			})
+		}
+	})
 }
 
 func TestMergeToolsFiles(t *testing.T) {

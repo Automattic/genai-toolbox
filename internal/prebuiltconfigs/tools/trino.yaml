@@ -1,0 +1,141 @@
+# Copyright 2025 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+sources:
+  trino-source:
+    kind: trino
+    host: ${TRINO_HOST:localhost}
+    port: ${TRINO_PORT:8080}
+    user: ${TRINO_USER:}
+    password: ${TRINO_PASSWORD:}
+    catalog: ${TRINO_CATALOG}
+    schema: ${TRINO_SCHEMA:default}
+    queryTimeout: ${TRINO_QUERY_TIMEOUT:}
+    sslEnabled: ${TRINO_SSL_ENABLED:false}
+    disableSslVerification: ${TRINO_DISABLE_SSL_VERIFICATION:false}
+    readOnlyMode: ${TRINO_READ_ONLY_MODE:true}
+    useClientAuth: ${TRINO_USE_CLIENT_AUTH:}
+
+tools:
+  execute_sql:
+    kind: trino-execute-sql
+    source: trino-source
+    description: "Execute a read-only SQL query against the Trino database. Supports SELECT, WITH, SHOW, DESCRIBE, EXPLAIN, and VALUES statements. Always include a LIMIT clause to avoid unbounded result sets."
+
+  list_catalogs:
+    kind: trino-sql
+    source: trino-source
+    description: List all catalogs available in the Trino cluster.
+    statement: SHOW CATALOGS
+
+  list_schemas:
+    kind: trino-sql
+    source: trino-source
+    description: List all schemas in a given Trino catalog.
+    statement: SHOW SCHEMAS FROM {{.catalog}}
+    templateParameters:
+      - name: catalog
+        type: string
+        description: "The catalog name to list schemas from."
+        required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*$"]
+
+  list_tables:
+    kind: trino-sql
+    source: trino-source
+    description: List all tables in a given schema, optionally qualified with catalog (e.g. 'my_schema' or 'my_catalog.my_schema').
+    statement: SHOW TABLES FROM {{.schema}}
+    templateParameters:
+      - name: schema
+        type: string
+        description: "The schema name, optionally qualified with catalog (e.g. 'my_schema' or 'my_catalog.my_schema')."
+        required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*)?$"]
+
+  describe_table:
+    kind: trino-sql
+    source: trino-source
+    description: Describe the columns of a table. The table name can be unqualified, partially qualified (schema.table), or fully qualified (catalog.schema.table).
+    statement: DESCRIBE {{.table}}
+    templateParameters:
+      - name: table
+        type: string
+        description: "The table name, optionally qualified with schema and catalog (e.g. 'my_table', 'my_schema.my_table', or 'my_catalog.my_schema.my_table')."
+        required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
+
+  show_create_table:
+    kind: trino-sql
+    source: trino-source
+    description: Show the CREATE TABLE statement for a table. The table name can be unqualified, partially qualified (schema.table), or fully qualified (catalog.schema.table).
+    statement: SHOW CREATE TABLE {{.table}}
+    templateParameters:
+      - name: table
+        type: string
+        description: "The table name, optionally qualified with schema and catalog (e.g. 'my_table', 'my_schema.my_table', or 'my_catalog.my_schema.my_table')."
+        required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
+
+  show_stats:
+    kind: trino-sql
+    source: trino-source
+    description: Show table statistics. The table name can be unqualified, partially qualified (schema.table), or fully qualified (catalog.schema.table).
+    statement: SHOW STATS FOR {{.table}}
+    templateParameters:
+      - name: table
+        type: string
+        description: "The table name, optionally qualified with schema and catalog (e.g. 'my_table', 'my_schema.my_table', or 'my_catalog.my_schema.my_table')."
+        required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
+
+  sample_table:
+    kind: trino-sql
+    source: trino-source
+    description: "Return a sample of rows from a table. Use this to quickly preview table contents. The table name can be unqualified, partially qualified (schema.table), or fully qualified (catalog.schema.table)."
+    statement: "SELECT * FROM {{.table}} LIMIT {{.limit}}"
+    templateParameters:
+      - name: table
+        type: string
+        description: "The table name, optionally qualified with schema and catalog (e.g. 'my_table', 'my_schema.my_table', or 'my_catalog.my_schema.my_table')."
+        required: true
+        allowedValues: ["^[a-zA-Z_][a-zA-Z0-9_]*(\\.[a-zA-Z_][a-zA-Z0-9_]*){0,2}$"]
+      - name: limit
+        type: integer
+        description: "Maximum number of rows to return."
+        default: 100
+        minValue: 1
+        maxValue: 100000
+
+  query_plan:
+    kind: trino-sql
+    source: trino-source
+    description: "Show the execution plan for a SQL query without executing it. Provide the SQL statement (omit the EXPLAIN keyword)."
+    statement: EXPLAIN {{.query}}
+    templateParameters:
+      - name: query
+        type: string
+        description: "The SQL statement to explain (omit the EXPLAIN keyword)."
+        required: true
+        excludedValues: [";", "--", "/\\*"]
+
+toolsets:
+  trino_tools:
+    - execute_sql
+    - list_catalogs
+    - list_schemas
+    - list_tables
+    - describe_table
+    - show_create_table
+    - show_stats
+    - sample_table
+    - query_plan
