@@ -1954,7 +1954,7 @@ func TestPrebuiltTools(t *testing.T) {
 			wantToolset: server.ToolsetConfigs{
 				"trino_tools": tools.ToolsetConfig{
 					Name:      "trino_tools",
-					ToolNames: []string{"list_catalogs", "list_schemas", "list_tables", "describe_table", "show_create_table", "show_stats", "query_plan", "select_query"},
+					ToolNames: []string{"execute_sql", "list_catalogs", "list_schemas", "list_tables", "describe_table", "show_create_table", "show_stats", "sample_table", "query_plan"},
 				},
 			},
 		},
@@ -1992,17 +1992,6 @@ func TestPrebuiltTrinoParamValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to parse trino prebuilt config: %v", err)
 	}
-
-	// Initialize select_query tool to get its real parameters
-	selectQueryCfg, ok := toolsFile.Tools["select_query"]
-	if !ok {
-		t.Fatal("select_query tool not found in parsed config")
-	}
-	selectQueryTool, err := selectQueryCfg.Initialize(nil)
-	if err != nil {
-		t.Fatalf("failed to initialize select_query: %v", err)
-	}
-	selectQueryParams := selectQueryTool.GetParameters()
 
 	// Initialize describe_table tool to get its real identifier parameter
 	describeTableCfg, ok := toolsFile.Tools["describe_table"]
@@ -2042,104 +2031,6 @@ func TestPrebuiltTrinoParamValidation(t *testing.T) {
 			})
 		}
 	})
-
-	t.Run("columns allowlist", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			value   string
-			wantErr bool
-		}{
-			{name: "wildcard", value: "*", wantErr: false},
-			{name: "single column", value: "col1", wantErr: false},
-			{name: "multiple columns", value: "col1, col2, col3", wantErr: false},
-			{name: "dot-qualified columns", value: "t.col1, t.col2", wantErr: false},
-			{name: "no spaces around comma", value: "col1,col2", wantErr: false},
-			{name: "rejects semicolon", value: "col1; DROP TABLE t", wantErr: true},
-			{name: "rejects subquery", value: "(SELECT 1) AS x", wantErr: true},
-			{name: "rejects UNION", value: "col1 UNION SELECT secret", wantErr: true},
-			{name: "rejects function call", value: "COUNT(*)", wantErr: true},
-			{name: "rejects empty", value: "", wantErr: true},
-		}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := parameters.ParseParams(selectQueryParams,
-					map[string]any{"table": "valid_table", "columns": tt.value, "limit": 100}, nil)
-				if (err != nil) != tt.wantErr {
-					t.Errorf("ParseParams(columns=%q) error = %v, wantErr %v", tt.value, err, tt.wantErr)
-				}
-			})
-		}
-	})
-
-	t.Run("limit validation", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			value   any
-			wantErr bool
-		}{
-			{name: "allows 1", value: 1, wantErr: false},
-			{name: "allows 1000", value: 1000, wantErr: false},
-			{name: "allows -1 (no limit)", value: -1, wantErr: false},
-			{name: "rejects 0", value: 0, wantErr: true},
-		}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := parameters.ParseParams(selectQueryParams,
-					map[string]any{"table": "valid_table", "columns": "*", "limit": tt.value}, nil)
-				if (err != nil) != tt.wantErr {
-					t.Errorf("ParseParams(limit=%v) error = %v, wantErr %v", tt.value, err, tt.wantErr)
-				}
-			})
-		}
-	})
-}
-
-// TestPrebuiltTrinoMaxLimitOverride verifies that TRINO_SELECT_QUERY_MAX_LIMIT
-// env var correctly overrides the max limit constraint.
-func TestPrebuiltTrinoMaxLimitOverride(t *testing.T) {
-	trinoYAML, _ := prebuiltconfigs.Get("trino")
-	t.Setenv("TRINO_CATALOG", "hive")
-	t.Setenv("TRINO_SELECT_QUERY_MAX_LIMIT", "500")
-
-	ctx, err := testutils.ContextWithNewLogger()
-	if err != nil {
-		t.Fatalf("unexpected error: %s", err)
-	}
-	toolsFile, err := parseToolsFile(ctx, trinoYAML)
-	if err != nil {
-		t.Fatalf("failed to parse trino prebuilt config: %v", err)
-	}
-
-	selectQueryCfg, ok := toolsFile.Tools["select_query"]
-	if !ok {
-		t.Fatal("select_query tool not found")
-	}
-	selectQueryTool, err := selectQueryCfg.Initialize(nil)
-	if err != nil {
-		t.Fatalf("failed to initialize select_query: %v", err)
-	}
-	params := selectQueryTool.GetParameters()
-
-	tests := []struct {
-		name    string
-		value   any
-		wantErr bool
-	}{
-		{name: "allows at new max", value: 500, wantErr: false},
-		{name: "rejects over new max", value: 501, wantErr: true},
-		{name: "allows under new max", value: 100, wantErr: false},
-		{name: "still rejects 0", value: 0, wantErr: true},
-		{name: "still allows -1", value: -1, wantErr: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := parameters.ParseParams(params,
-				map[string]any{"table": "valid_table", "columns": "*", "limit": tt.value}, nil)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseParams(limit=%v) error = %v, wantErr %v", tt.value, err, tt.wantErr)
-			}
-		})
-	}
 }
 
 func TestMergeToolsFiles(t *testing.T) {
