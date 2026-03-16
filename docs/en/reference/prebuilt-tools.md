@@ -839,10 +839,8 @@ See [Usage Examples](../reference/cli.md#examples).
     *   `TRINO_SOURCE`: (Optional) Trino source name for query attribution (sets
         `X-Trino-Source`).
     *   `TRINO_CLIENT_TAGS`: (Optional) Static client tags (comma-separated) attached
-        to every query via `X-Trino-Client-Tags`.
-    *   `TRINO_CLIENT_TAGS_HEADER`: (Optional) HTTP header name to read per-request
-        client tags from. Merged with `TRINO_CLIENT_TAGS`. The header is treated as
-        untrusted input; sensitive headers like Authorization are never exposed.
+        to every query via `X-Trino-Client-Tags`. Per-request tags from the incoming
+        `X-Trino-Client-Tags` header are merged automatically.
     *   `TRINO_QUERY_TIMEOUT`: (Optional) Query timeout duration (e.g. "30m").
     *   `TRINO_SSL_ENABLED`: (Optional) Enable SSL/TLS (Default: false).
     *   `TRINO_DISABLE_SSL_VERIFICATION`: (Optional) Skip SSL certificate

@@ -62,7 +62,6 @@ type Config struct {
 	Schema                 string `yaml:"schema" validate:"required"`
 	Source                 string `yaml:"source"`
 	ClientTags             string `yaml:"clientTags"`
-	ClientTagsHeader       string `yaml:"clientTagsHeader"`
 	QueryTimeout           string `yaml:"queryTimeout"`
 	AccessToken            string `yaml:"accessToken"`
 	KerberosEnabled        bool   `yaml:"kerberosEnabled"`
@@ -175,18 +174,16 @@ func prepareImpersonatedParams(params []any, user string) ([]any, error) {
 }
 
 // resolveClientTags merges static client tags from config with per-request
-// tags from the HTTP header specified by ClientTagsHeader. Returns the
-// comma-separated result, or empty string if no tags are configured.
+// tags from the X-Trino-Client-Tags header in the incoming request. Returns
+// the comma-separated result, or empty string if no tags are present.
 func (s *Source) resolveClientTags(ctx context.Context) string {
 	var parts []string
 	if s.ClientTags != "" {
 		parts = append(parts, s.ClientTags)
 	}
-	if s.ClientTagsHeader != "" {
-		if h := util.RequestHeadersFromContext(ctx); h != nil {
-			if v := strings.TrimSpace(h.Get(s.ClientTagsHeader)); v != "" {
-				parts = append(parts, v)
-			}
+	if h := util.RequestHeadersFromContext(ctx); h != nil {
+		if v := strings.TrimSpace(h.Get(trinoClientTagsHeader)); v != "" {
+			parts = append(parts, v)
 		}
 	}
 	return strings.Join(parts, ",")
