@@ -152,9 +152,17 @@ func (s *Source) GetAuthTokenHeaderName() string {
 	return strings.TrimSpace(s.UseClientAuth)
 }
 
+// appendNamedParam appends a single sql.Named parameter to params, returning
+// a fresh slice to avoid aliasing the caller's backing array.
+func appendNamedParam(params []any, name string, value any) []any {
+	out := make([]any, len(params)+1)
+	copy(out, params)
+	out[len(params)] = sql.Named(name, value)
+	return out
+}
+
 // prepareImpersonatedParams validates the user identity and returns a new
-// params slice with sql.Named("X-Trino-User", user) appended. The returned
-// slice is always a fresh allocation to avoid aliasing the caller's backing array.
+// params slice with sql.Named("X-Trino-User", user) appended.
 func prepareImpersonatedParams(params []any, user string) ([]any, error) {
 	user = strings.TrimSpace(user)
 	if user == "" {
@@ -163,10 +171,7 @@ func prepareImpersonatedParams(params []any, user string) ([]any, error) {
 	if !validUsernameRe.MatchString(user) {
 		return nil, fmt.Errorf("invalid user identity %q: must match %s", user, validUsernameRe.String())
 	}
-	out := make([]any, len(params)+1)
-	copy(out, params)
-	out[len(params)] = sql.Named(trinoUserHeader, user)
-	return out, nil
+	return appendNamedParam(params, trinoUserHeader, user), nil
 }
 
 // resolveClientTags merges static client tags from config with per-request
@@ -187,16 +192,13 @@ func (s *Source) resolveClientTags(ctx context.Context) string {
 	return strings.Join(parts, ",")
 }
 
-// appendClientTags adds sql.Named("X-Trino-Client-Tags", tags) to params
-// if any client tags are resolved. Returns a new slice to avoid aliasing.
+// appendClientTags appends sql.Named("X-Trino-Client-Tags", tags) to params
+// if any client tags are resolved. Returns params unchanged when tags is empty.
 func appendClientTags(params []any, tags string) []any {
 	if tags == "" {
 		return params
 	}
-	out := make([]any, len(params)+1)
-	copy(out, params)
-	out[len(params)] = sql.Named(trinoClientTagsHeader, tags)
-	return out
+	return appendNamedParam(params, trinoClientTagsHeader, tags)
 }
 
 // RunSQLAsUser executes a SQL statement as a specific user identity.
