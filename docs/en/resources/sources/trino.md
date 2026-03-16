@@ -68,6 +68,9 @@ instead of hardcoding your secrets into the configuration file.
 | disableSslVerification | boolean  |    false     | Skip SSL/TLS certificate verification (default: false)                       |
 | sslCertPath            |  string  |    false     | Path to a custom SSL/TLS certificate file                                    |
 | sslCert                |  string  |    false     | Custom SSL/TLS certificate content                                           |
+| source                 |  string  |    false     | Trino source name for query attribution (maps to `X-Trino-Source` header)    |
+| clientTags             |  string  |    false     | Static client tags (comma-separated) attached to every query via `X-Trino-Client-Tags`. Useful for Trino resource group routing and query log filtering. |
+| clientTagsHeader       |  string  |    false     | HTTP header name to read per-request client tags from. Values are merged with static `clientTags`. See [Client tag forwarding](#client-tag-forwarding) below. |
 | readOnlyMode           | boolean  |    false     | Block DML/DDL statements, allowing only SELECT, WITH, SHOW, DESCRIBE, EXPLAIN, and VALUES (default: false) |
 | useClientAuth          |  string  |    false     | HTTP header name to read per-user identity from (e.g. "X-Authenticated-User"). When set, Toolbox uses this value as the Trino session user via `X-Trino-User` per query. When empty, per-user mode is disabled and static source auth is used. |
 
@@ -92,6 +95,12 @@ In code, this is done with `sql.Named("X-Trino-User", "<user>")`, which the trin
 For this to work in production, Trino must be configured to allow impersonation from the authenticated service principal to the target users.
 
 The trusted-header model assumes the header is set by an upstream authenticating proxy (e.g., nginx with LDAP/OAuth). Direct client access without a proxy would allow header spoofing.
+
+### Client tag forwarding
+
+When `clientTagsHeader` is set, Toolbox reads the named HTTP header from each incoming MCP/REST request and merges its value with the static `clientTags` config. The merged value is sent to Trino as `X-Trino-Client-Tags` per query. This lets different MCP clients (e.g., Claude Code, Cursor) identify themselves in Trino query logs and resource group rules.
+
+The header value is treated as untrusted input appended to the tag list — it cannot override the static tags, only extend them. Standard credential headers (`Authorization`, `Cookie`, etc.) and the per-source auth header (configured via `useClientAuth`) are stripped from context before tool code can access them.
 
 ### Prebuilt tool template validation
 

@@ -205,7 +205,7 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, resourceMgr *re
 	}
 
 	// run tool invocation and generate response.
-	ctx = util.WithRequestHeaders(ctx, header)
+	ctx = util.WithRequestHeaders(ctx, header, authTokenHeadername)
 	results, err := tool.Invoke(ctx, resourceMgr, params, accessToken)
 	if err != nil {
 		var tbErr util.ToolboxError

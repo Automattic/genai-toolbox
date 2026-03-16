@@ -178,9 +178,33 @@ func LoggerFromContext(ctx context.Context) (log.Logger, error) {
 
 const requestHeadersKey contextKey = "requestHeaders"
 
-// WithRequestHeaders stores the incoming HTTP request headers in context.
-func WithRequestHeaders(ctx context.Context, h http.Header) context.Context {
-	return context.WithValue(ctx, requestHeadersKey, h)
+// sensitiveHeaders are HTTP headers stripped before propagating into tool
+// invocation context. Authorization is already extracted separately as an
+// access token; the remaining headers here have no legitimate use inside
+// tool/source code.
+var sensitiveHeaders = []string{
+	"Authorization",
+	"Cookie",
+	"Proxy-Authorization",
+	"Set-Cookie",
+}
+
+// WithRequestHeaders stores a sanitized clone of the incoming HTTP request
+// headers in context. Standard credential headers and any extra headers
+// named in extraSensitive (e.g., per-source auth headers) are stripped so
+// that tool/source code only sees non-credential headers.
+func WithRequestHeaders(ctx context.Context, h http.Header, extraSensitive ...string) context.Context {
+	if h == nil {
+		return ctx
+	}
+	safe := h.Clone()
+	for _, k := range sensitiveHeaders {
+		safe.Del(k)
+	}
+	for _, k := range extraSensitive {
+		safe.Del(k)
+	}
+	return context.WithValue(ctx, requestHeadersKey, safe)
 }
 
 // RequestHeadersFromContext retrieves the HTTP request headers from context.
