@@ -212,6 +212,9 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, resourceMgr *re
 	}
 
 	// run tool invocation and generate response.
+	if header != nil {
+		ctx = util.WithClientTags(ctx, header.Get("X-Trino-Client-Tags"))
+	}
 	results, err := tool.Invoke(ctx, resourceMgr, params, accessToken)
 	if err != nil {
 		var tbErr util.ToolboxError

@@ -27,6 +27,7 @@ import (
 	"github.com/googleapis/genai-toolbox/internal/server"
 	"github.com/googleapis/genai-toolbox/internal/sources"
 	"github.com/googleapis/genai-toolbox/internal/testutils"
+	"github.com/googleapis/genai-toolbox/internal/util"
 )
 
 func TestBuildTrinoDSN(t *testing.T) {
@@ -70,6 +71,16 @@ func TestBuildTrinoDSN(t *testing.T) {
 			name: "with query timeout",
 			cfg:  Config{Host: "localhost", Port: "8080", User: "testuser", Catalog: "hive", Schema: "default", QueryTimeout: "30m"},
 			want: "http://testuser@localhost:8080?catalog=hive&queryTimeout=30m&schema=default",
+		},
+		{
+			name: "with source",
+			cfg:  Config{Host: "localhost", Port: "8080", User: "testuser", Catalog: "hive", Schema: "default", Source: "trino-mcp"},
+			want: "http://testuser@localhost:8080?catalog=hive&schema=default&source=trino-mcp",
+		},
+		{
+			name: "with client tags",
+			cfg:  Config{Host: "localhost", Port: "8080", User: "testuser", Catalog: "hive", Schema: "default", ClientTags: "mcp,ai-assistant"},
+			want: "http://testuser@localhost:8080?catalog=hive&clientTags=mcp%2Cai-assistant&schema=default",
 		},
 		{
 			name: "anonymous access (empty user)",
@@ -118,6 +129,31 @@ func TestUseClientAuthorization(t *testing.T) {
 			}
 			if got := s.GetAuthTokenHeaderName(); got != tt.wantHeaderName {
 				t.Errorf("GetAuthTokenHeaderName() = %q, want %q", got, tt.wantHeaderName)
+			}
+		})
+	}
+}
+
+func TestResolveClientTags(t *testing.T) {
+	tests := []struct {
+		name        string
+		clientTags  string
+		headerValue string
+		want        string
+	}{
+		{name: "static only", clientTags: "mcp", want: "mcp"},
+		{name: "header only", headerValue: "claude-code", want: "claude-code"},
+		{name: "merged", clientTags: "mcp", headerValue: "claude-code", want: "mcp,claude-code"},
+		{name: "empty header value uses static", clientTags: "mcp", headerValue: "", want: "mcp"},
+		{name: "no config no header returns empty", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Source{Config: Config{ClientTags: tt.clientTags}}
+			ctx := util.WithClientTags(context.Background(), tt.headerValue)
+			if got := s.resolveClientTags(ctx); got != tt.want {
+				t.Errorf("resolveClientTags() = %q, want %q", got, tt.want)
 			}
 		})
 	}

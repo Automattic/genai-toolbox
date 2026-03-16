@@ -60,6 +60,8 @@ type Config struct {
 	Password               string `yaml:"password"`
 	Catalog                string `yaml:"catalog" validate:"required"`
 	Schema                 string `yaml:"schema" validate:"required"`
+	Source                 string `yaml:"source"`
+	ClientTags             string `yaml:"clientTags"`
 	QueryTimeout           string `yaml:"queryTimeout"`
 	AccessToken            string `yaml:"accessToken"`
 	KerberosEnabled        bool   `yaml:"kerberosEnabled"`
@@ -114,6 +116,10 @@ const defaultClientAuthHeader = "X-Authenticated-User"
 // session user identity. Used with sql.Named to override per query.
 const trinoUserHeader = "X-Trino-User"
 
+// trinoClientTagsHeader is the HTTP header the trino-go-client uses to set
+// client tags. Used with sql.Named to override per query.
+const trinoClientTagsHeader = "X-Trino-Client-Tags"
+
 // validUsernameRe matches allowed usernames for impersonation.
 // Constraining the pattern prevents malformed or injected identities from
 // reaching Trino, failing fast in MCP instead.
@@ -145,9 +151,17 @@ func (s *Source) GetAuthTokenHeaderName() string {
 	return strings.TrimSpace(s.UseClientAuth)
 }
 
+// appendNamedParam appends a single sql.Named parameter to params, returning
+// a fresh slice to avoid aliasing the caller's backing array.
+func appendNamedParam(params []any, name string, value any) []any {
+	out := make([]any, len(params)+1)
+	copy(out, params)
+	out[len(params)] = sql.Named(name, value)
+	return out
+}
+
 // prepareImpersonatedParams validates the user identity and returns a new
-// params slice with sql.Named("X-Trino-User", user) appended. The returned
-// slice is always a fresh allocation to avoid aliasing the caller's backing array.
+// params slice with sql.Named("X-Trino-User", user) appended.
 func prepareImpersonatedParams(params []any, user string) ([]any, error) {
 	user = strings.TrimSpace(user)
 	if user == "" {
@@ -156,10 +170,30 @@ func prepareImpersonatedParams(params []any, user string) ([]any, error) {
 	if !validUsernameRe.MatchString(user) {
 		return nil, fmt.Errorf("invalid user identity %q: must match %s", user, validUsernameRe.String())
 	}
-	out := make([]any, len(params)+1)
-	copy(out, params)
-	out[len(params)] = sql.Named(trinoUserHeader, user)
-	return out, nil
+	return appendNamedParam(params, trinoUserHeader, user), nil
+}
+
+// resolveClientTags merges static client tags from config with per-request
+// tags from the X-Trino-Client-Tags header in the incoming request. Returns
+// the comma-separated result, or empty string if no tags are present.
+func (s *Source) resolveClientTags(ctx context.Context) string {
+	var parts []string
+	if s.ClientTags != "" {
+		parts = append(parts, s.ClientTags)
+	}
+	if v := strings.TrimSpace(util.ClientTagsFromContext(ctx)); v != "" {
+		parts = append(parts, v)
+	}
+	return strings.Join(parts, ",")
+}
+
+// appendClientTags appends sql.Named("X-Trino-Client-Tags", tags) to params
+// if any client tags are resolved. Returns params unchanged when tags is empty.
+func appendClientTags(params []any, tags string) []any {
+	if tags == "" {
+		return params
+	}
+	return appendNamedParam(params, trinoClientTagsHeader, tags)
 }
 
 // RunSQLAsUser executes a SQL statement as a specific user identity.
@@ -174,6 +208,7 @@ func (s *Source) RunSQLAsUser(ctx context.Context, statement string, params []an
 	if err != nil {
 		return nil, err
 	}
+	params = appendClientTags(params, s.resolveClientTags(ctx))
 	return executeQuery(ctx, s.Pool, statement, params)
 }
 
@@ -304,6 +339,7 @@ func (s *Source) RunSQL(ctx context.Context, statement string, params []any) (an
 	if err := checkReadOnly(s.ReadOnlyMode, statement); err != nil {
 		return nil, err
 	}
+	params = appendClientTags(params, s.resolveClientTags(ctx))
 	return executeQuery(ctx, s.Pool, statement, params)
 }
 
@@ -409,6 +445,12 @@ func buildTrinoDSN(cfg Config) (string, error) {
 	query := url.Values{}
 	query.Set("catalog", cfg.Catalog)
 	query.Set("schema", cfg.Schema)
+	if cfg.Source != "" {
+		query.Set("source", cfg.Source)
+	}
+	if cfg.ClientTags != "" {
+		query.Set("clientTags", cfg.ClientTags)
+	}
 	if cfg.QueryTimeout != "" {
 		query.Set("queryTimeout", cfg.QueryTimeout)
 	}

@@ -836,6 +836,11 @@ See [Usage Examples](../reference/cli.md#examples).
     *   `TRINO_PASSWORD`: (Optional) The password for authentication.
     *   `TRINO_CATALOG`: The default catalog to use for queries.
     *   `TRINO_SCHEMA`: (Optional) The default schema (Default: default).
+    *   `TRINO_SOURCE`: (Optional) Trino source name for query attribution (sets
+        `X-Trino-Source`).
+    *   `TRINO_CLIENT_TAGS`: (Optional) Static client tags (comma-separated) attached
+        to every query via `X-Trino-Client-Tags`. Per-request tags from the incoming
+        `X-Trino-Client-Tags` header are merged automatically.
     *   `TRINO_QUERY_TIMEOUT`: (Optional) Query timeout duration (e.g. "30m").
     *   `TRINO_SSL_ENABLED`: (Optional) Enable SSL/TLS (Default: false).
     *   `TRINO_DISABLE_SSL_VERIFICATION`: (Optional) Skip SSL certificate
