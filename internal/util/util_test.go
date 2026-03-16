@@ -16,67 +16,18 @@ package util
 
 import (
 	"context"
-	"net/http"
 	"testing"
 )
 
-func TestWithRequestHeaders_StripsSensitiveHeaders(t *testing.T) {
-	h := http.Header{}
-	h.Set("Authorization", "Bearer secret")
-	h.Set("Cookie", "session=abc")
-	h.Set("Proxy-Authorization", "Basic creds")
-	h.Set("Set-Cookie", "foo=bar")
-	h.Set("X-Client-Tags", "claude-code")
-	h.Set("X-Request-Id", "123")
-
-	ctx := WithRequestHeaders(context.Background(), h)
-	got := RequestHeadersFromContext(ctx)
-
-	if got.Get("Authorization") != "" {
-		t.Error("Authorization header should be stripped")
-	}
-	if got.Get("Cookie") != "" {
-		t.Error("Cookie header should be stripped")
-	}
-	if got.Get("Proxy-Authorization") != "" {
-		t.Error("Proxy-Authorization header should be stripped")
-	}
-	if got.Get("Set-Cookie") != "" {
-		t.Error("Set-Cookie header should be stripped")
-	}
-	if got.Get("X-Client-Tags") != "claude-code" {
-		t.Errorf("X-Client-Tags = %q, want %q", got.Get("X-Client-Tags"), "claude-code")
-	}
-	if got.Get("X-Request-Id") != "123" {
-		t.Errorf("X-Request-Id = %q, want %q", got.Get("X-Request-Id"), "123")
-	}
-
-	// Original header must not be mutated.
-	if h.Get("Authorization") != "Bearer secret" {
-		t.Error("original Authorization header was mutated")
+func TestClientTagsRoundTrip(t *testing.T) {
+	ctx := WithClientTags(context.Background(), "mcp,claude-code")
+	if got := ClientTagsFromContext(ctx); got != "mcp,claude-code" {
+		t.Errorf("ClientTagsFromContext() = %q, want %q", got, "mcp,claude-code")
 	}
 }
 
-func TestWithRequestHeaders_StripsExtraSensitiveHeaders(t *testing.T) {
-	h := http.Header{}
-	h.Set("X-Authenticated-User", "alice")
-	h.Set("X-Client-Tags", "claude-code")
-
-	ctx := WithRequestHeaders(context.Background(), h, "X-Authenticated-User")
-	got := RequestHeadersFromContext(ctx)
-
-	if got.Get("X-Authenticated-User") != "" {
-		t.Error("extra sensitive header X-Authenticated-User should be stripped")
-	}
-	if got.Get("X-Client-Tags") != "claude-code" {
-		t.Errorf("X-Client-Tags = %q, want %q", got.Get("X-Client-Tags"), "claude-code")
-	}
-}
-
-func TestWithRequestHeaders_NilReturnsUnmodifiedContext(t *testing.T) {
-	ctx := context.Background()
-	got := WithRequestHeaders(ctx, nil)
-	if RequestHeadersFromContext(got) != nil {
-		t.Error("nil header input should not store anything in context")
+func TestClientTagsFromContext_EmptyWhenUnset(t *testing.T) {
+	if got := ClientTagsFromContext(context.Background()); got != "" {
+		t.Errorf("ClientTagsFromContext() = %q, want empty", got)
 	}
 }

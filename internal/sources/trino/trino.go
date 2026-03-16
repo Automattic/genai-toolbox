@@ -181,10 +181,8 @@ func (s *Source) resolveClientTags(ctx context.Context) string {
 	if s.ClientTags != "" {
 		parts = append(parts, s.ClientTags)
 	}
-	if h := util.RequestHeadersFromContext(ctx); h != nil {
-		if v := strings.TrimSpace(h.Get(trinoClientTagsHeader)); v != "" {
-			parts = append(parts, v)
-		}
+	if v := strings.TrimSpace(util.ClientTagsFromContext(ctx)); v != "" {
+		parts = append(parts, v)
 	}
 	return strings.Join(parts, ",")
 }

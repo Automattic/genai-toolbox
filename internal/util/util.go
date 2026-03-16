@@ -176,44 +176,19 @@ func LoggerFromContext(ctx context.Context) (log.Logger, error) {
 	return nil, fmt.Errorf("unable to retrieve logger")
 }
 
-const requestHeadersKey contextKey = "requestHeaders"
+const clientTagsKey contextKey = "clientTags"
 
-// sensitiveHeaders are HTTP headers stripped before propagating into tool
-// invocation context. Authorization is already extracted separately as an
-// access token; the remaining headers here have no legitimate use inside
-// tool/source code.
-var sensitiveHeaders = []string{
-	"Authorization",
-	"Cookie",
-	"Proxy-Authorization",
-	"Set-Cookie",
+// WithClientTags stores a client tags string in context.
+func WithClientTags(ctx context.Context, tags string) context.Context {
+	return context.WithValue(ctx, clientTagsKey, tags)
 }
 
-// WithRequestHeaders stores a sanitized clone of the incoming HTTP request
-// headers in context. Standard credential headers and any extra headers
-// named in extraSensitive (e.g., per-source auth headers) are stripped so
-// that tool/source code only sees non-credential headers.
-func WithRequestHeaders(ctx context.Context, h http.Header, extraSensitive ...string) context.Context {
-	if h == nil {
-		return ctx
+// ClientTagsFromContext retrieves the client tags string from context.
+func ClientTagsFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(clientTagsKey).(string); ok {
+		return v
 	}
-	safe := h.Clone()
-	for _, k := range sensitiveHeaders {
-		safe.Del(k)
-	}
-	for _, k := range extraSensitive {
-		safe.Del(k)
-	}
-	return context.WithValue(ctx, requestHeadersKey, safe)
-}
-
-// RequestHeadersFromContext retrieves the HTTP request headers from context.
-// Returns nil if no headers are stored.
-func RequestHeadersFromContext(ctx context.Context) http.Header {
-	if h, ok := ctx.Value(requestHeadersKey).(http.Header); ok {
-		return h
-	}
-	return nil
+	return ""
 }
 
 const instrumentationKey contextKey = "instrumentation"

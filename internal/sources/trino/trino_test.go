@@ -151,12 +151,7 @@ func TestResolveClientTags(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := &Source{Config: Config{ClientTags: tt.clientTags}}
-			ctx := context.Background()
-			h := http.Header{}
-			if tt.headerValue != "" {
-				h.Set("X-Trino-Client-Tags", tt.headerValue)
-			}
-			ctx = util.WithRequestHeaders(ctx, h)
+			ctx := util.WithClientTags(context.Background(), tt.headerValue)
 			if got := s.resolveClientTags(ctx); got != tt.want {
 				t.Errorf("resolveClientTags() = %q, want %q", got, tt.want)
 			}

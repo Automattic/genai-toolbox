@@ -275,7 +275,7 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx = util.WithRequestHeaders(ctx, r.Header, authTokenHeaderName)
+	ctx = util.WithClientTags(ctx, r.Header.Get("X-Trino-Client-Tags"))
 	res, err := tool.Invoke(ctx, s.ResourceMgr, params, accessToken)
 
 	// Determine what error to return to the users.
