@@ -72,6 +72,16 @@ func TestBuildTrinoDSN(t *testing.T) {
 			want: "http://testuser@localhost:8080?catalog=hive&queryTimeout=30m&schema=default",
 		},
 		{
+			name: "with source",
+			cfg:  Config{Host: "localhost", Port: "8080", User: "testuser", Catalog: "hive", Schema: "default", Source: "trino-mcp"},
+			want: "http://testuser@localhost:8080?catalog=hive&schema=default&source=trino-mcp",
+		},
+		{
+			name: "with client tags",
+			cfg:  Config{Host: "localhost", Port: "8080", User: "testuser", Catalog: "hive", Schema: "default", ClientTags: "mcp,ai-assistant"},
+			want: "http://testuser@localhost:8080?catalog=hive&clientTags=mcp%2Cai-assistant&schema=default",
+		},
+		{
 			name: "anonymous access (empty user)",
 			cfg:  Config{Host: "localhost", Port: "8080", Catalog: "hive", Schema: "default"},
 			want: "http://localhost:8080?catalog=hive&schema=default",

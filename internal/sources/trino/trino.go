@@ -60,6 +60,8 @@ type Config struct {
 	Password               string `yaml:"password"`
 	Catalog                string `yaml:"catalog" validate:"required"`
 	Schema                 string `yaml:"schema" validate:"required"`
+	Source                 string `yaml:"source"`
+	ClientTags             string `yaml:"clientTags"`
 	QueryTimeout           string `yaml:"queryTimeout"`
 	AccessToken            string `yaml:"accessToken"`
 	KerberosEnabled        bool   `yaml:"kerberosEnabled"`
@@ -409,6 +411,12 @@ func buildTrinoDSN(cfg Config) (string, error) {
 	query := url.Values{}
 	query.Set("catalog", cfg.Catalog)
 	query.Set("schema", cfg.Schema)
+	if cfg.Source != "" {
+		query.Set("source", cfg.Source)
+	}
+	if cfg.ClientTags != "" {
+		query.Set("clientTags", cfg.ClientTags)
+	}
 	if cfg.QueryTimeout != "" {
 		query.Set("queryTimeout", cfg.QueryTimeout)
 	}
