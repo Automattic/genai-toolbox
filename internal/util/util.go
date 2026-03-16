@@ -176,6 +176,22 @@ func LoggerFromContext(ctx context.Context) (log.Logger, error) {
 	return nil, fmt.Errorf("unable to retrieve logger")
 }
 
+const requestHeadersKey contextKey = "requestHeaders"
+
+// WithRequestHeaders stores the incoming HTTP request headers in context.
+func WithRequestHeaders(ctx context.Context, h http.Header) context.Context {
+	return context.WithValue(ctx, requestHeadersKey, h)
+}
+
+// RequestHeadersFromContext retrieves the HTTP request headers from context.
+// Returns nil if no headers are stored.
+func RequestHeadersFromContext(ctx context.Context) http.Header {
+	if h, ok := ctx.Value(requestHeadersKey).(http.Header); ok {
+		return h
+	}
+	return nil
+}
+
 const instrumentationKey contextKey = "instrumentation"
 
 // WithInstrumentation adds an instrumentation into the context as a value

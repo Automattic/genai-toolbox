@@ -27,6 +27,7 @@ import (
 	"github.com/googleapis/genai-toolbox/internal/server"
 	"github.com/googleapis/genai-toolbox/internal/sources"
 	"github.com/googleapis/genai-toolbox/internal/testutils"
+	"github.com/googleapis/genai-toolbox/internal/util"
 )
 
 func TestBuildTrinoDSN(t *testing.T) {
@@ -128,6 +129,40 @@ func TestUseClientAuthorization(t *testing.T) {
 			}
 			if got := s.GetAuthTokenHeaderName(); got != tt.wantHeaderName {
 				t.Errorf("GetAuthTokenHeaderName() = %q, want %q", got, tt.wantHeaderName)
+			}
+		})
+	}
+}
+
+func TestResolveClientTags(t *testing.T) {
+	tests := []struct {
+		name             string
+		clientTags       string
+		clientTagsHeader string
+		headerValue      string
+		want             string
+	}{
+		{name: "static only", clientTags: "mcp", want: "mcp"},
+		{name: "header only", clientTagsHeader: "X-Client-Tags", headerValue: "claude-code", want: "claude-code"},
+		{name: "merged", clientTags: "mcp", clientTagsHeader: "X-Client-Tags", headerValue: "claude-code", want: "mcp,claude-code"},
+		{name: "empty header value uses static", clientTags: "mcp", clientTagsHeader: "X-Client-Tags", headerValue: "", want: "mcp"},
+		{name: "no config returns empty", want: ""},
+		{name: "no header config ignores context headers", clientTags: "mcp", headerValue: "claude-code", want: "mcp"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Source{Config: Config{ClientTags: tt.clientTags, ClientTagsHeader: tt.clientTagsHeader}}
+			ctx := context.Background()
+			if tt.headerValue != "" || tt.clientTagsHeader != "" {
+				h := http.Header{}
+				if tt.headerValue != "" && tt.clientTagsHeader != "" {
+					h.Set(tt.clientTagsHeader, tt.headerValue)
+				}
+				ctx = util.WithRequestHeaders(ctx, h)
+			}
+			if got := s.resolveClientTags(ctx); got != tt.want {
+				t.Errorf("resolveClientTags() = %q, want %q", got, tt.want)
 			}
 		})
 	}

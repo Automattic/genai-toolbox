@@ -275,6 +275,7 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx = util.WithRequestHeaders(ctx, r.Header)
 	res, err := tool.Invoke(ctx, s.ResourceMgr, params, accessToken)
 
 	// Determine what error to return to the users.

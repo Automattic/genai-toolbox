@@ -22,6 +22,7 @@ sources:
     schema: ${TRINO_SCHEMA:default}
     source: ${TRINO_SOURCE:}
     clientTags: ${TRINO_CLIENT_TAGS:}
+    clientTagsHeader: ${TRINO_CLIENT_TAGS_HEADER:}
     queryTimeout: ${TRINO_QUERY_TIMEOUT:}
     sslEnabled: ${TRINO_SSL_ENABLED:false}
     disableSslVerification: ${TRINO_DISABLE_SSL_VERIFICATION:false}

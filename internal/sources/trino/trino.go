@@ -62,6 +62,7 @@ type Config struct {
 	Schema                 string `yaml:"schema" validate:"required"`
 	Source                 string `yaml:"source"`
 	ClientTags             string `yaml:"clientTags"`
+	ClientTagsHeader       string `yaml:"clientTagsHeader"`
 	QueryTimeout           string `yaml:"queryTimeout"`
 	AccessToken            string `yaml:"accessToken"`
 	KerberosEnabled        bool   `yaml:"kerberosEnabled"`
@@ -116,6 +117,10 @@ const defaultClientAuthHeader = "X-Authenticated-User"
 // session user identity. Used with sql.Named to override per query.
 const trinoUserHeader = "X-Trino-User"
 
+// trinoClientTagsHeader is the HTTP header the trino-go-client uses to set
+// client tags. Used with sql.Named to override per query.
+const trinoClientTagsHeader = "X-Trino-Client-Tags"
+
 // validUsernameRe matches allowed usernames for impersonation.
 // Constraining the pattern prevents malformed or injected identities from
 // reaching Trino, failing fast in MCP instead.
@@ -164,6 +169,36 @@ func prepareImpersonatedParams(params []any, user string) ([]any, error) {
 	return out, nil
 }
 
+// resolveClientTags merges static client tags from config with per-request
+// tags from the HTTP header specified by ClientTagsHeader. Returns the
+// comma-separated result, or empty string if no tags are configured.
+func (s *Source) resolveClientTags(ctx context.Context) string {
+	var parts []string
+	if s.ClientTags != "" {
+		parts = append(parts, s.ClientTags)
+	}
+	if s.ClientTagsHeader != "" {
+		if h := util.RequestHeadersFromContext(ctx); h != nil {
+			if v := strings.TrimSpace(h.Get(s.ClientTagsHeader)); v != "" {
+				parts = append(parts, v)
+			}
+		}
+	}
+	return strings.Join(parts, ",")
+}
+
+// appendClientTags adds sql.Named("X-Trino-Client-Tags", tags) to params
+// if any client tags are resolved. Returns a new slice to avoid aliasing.
+func appendClientTags(params []any, tags string) []any {
+	if tags == "" {
+		return params
+	}
+	out := make([]any, len(params)+1)
+	copy(out, params)
+	out[len(params)] = sql.Named(trinoClientTagsHeader, tags)
+	return out
+}
+
 // RunSQLAsUser executes a SQL statement as a specific user identity.
 // The shared pool authenticates with service account credentials while
 // the trino-go-client's sql.Named("X-Trino-User", user) overrides the
@@ -176,6 +211,7 @@ func (s *Source) RunSQLAsUser(ctx context.Context, statement string, params []an
 	if err != nil {
 		return nil, err
 	}
+	params = appendClientTags(params, s.resolveClientTags(ctx))
 	return executeQuery(ctx, s.Pool, statement, params)
 }
 
@@ -306,6 +342,7 @@ func (s *Source) RunSQL(ctx context.Context, statement string, params []any) (an
 	if err := checkReadOnly(s.ReadOnlyMode, statement); err != nil {
 		return nil, err
 	}
+	params = appendClientTags(params, s.resolveClientTags(ctx))
 	return executeQuery(ctx, s.Pool, statement, params)
 }
 
