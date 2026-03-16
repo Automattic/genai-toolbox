@@ -176,6 +176,21 @@ func LoggerFromContext(ctx context.Context) (log.Logger, error) {
 	return nil, fmt.Errorf("unable to retrieve logger")
 }
 
+const clientTagsKey contextKey = "clientTags"
+
+// WithClientTags stores a client tags string in context.
+func WithClientTags(ctx context.Context, tags string) context.Context {
+	return context.WithValue(ctx, clientTagsKey, tags)
+}
+
+// ClientTagsFromContext retrieves the client tags string from context.
+func ClientTagsFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(clientTagsKey).(string); ok {
+		return v
+	}
+	return ""
+}
+
 const instrumentationKey contextKey = "instrumentation"
 
 // WithInstrumentation adds an instrumentation into the context as a value

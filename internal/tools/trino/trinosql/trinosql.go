@@ -16,7 +16,6 @@ package trinosql
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net/http"
 
@@ -45,8 +44,10 @@ func newConfig(ctx context.Context, name string, decoder *yaml.Decoder) (tools.T
 }
 
 type compatibleSource interface {
-	TrinoDB() *sql.DB
 	RunSQL(context.Context, string, []any) (any, error)
+	RunSQLAsUser(context.Context, string, []any, string) (any, error)
+	UseClientAuthorization() bool
+	GetAuthTokenHeaderName() string
 }
 
 type Config struct {
@@ -111,7 +112,13 @@ func (t Tool) Invoke(ctx context.Context, resourceMgr tools.SourceProvider, para
 		return nil, util.NewAgentError("unable to extract standard params", err)
 	}
 	sliceParams := newParams.AsSlice()
-	res, err := source.RunSQL(ctx, newStatement, sliceParams)
+
+	var res any
+	if source.UseClientAuthorization() {
+		res, err = source.RunSQLAsUser(ctx, newStatement, sliceParams, string(accessToken))
+	} else {
+		res, err = source.RunSQL(ctx, newStatement, sliceParams)
+	}
 	if err != nil {
 		return nil, util.ProcessGeneralError(err)
 	}
@@ -135,7 +142,11 @@ func (t Tool) Authorized(verifiedAuthServices []string) bool {
 }
 
 func (t Tool) RequiresClientAuthorization(resourceMgr tools.SourceProvider) (bool, error) {
-	return false, nil
+	source, err := tools.GetCompatibleSource[compatibleSource](resourceMgr, t.Source, t.Name, t.Type)
+	if err != nil {
+		return false, err
+	}
+	return source.UseClientAuthorization(), nil
 }
 
 func (t Tool) ToConfig() tools.ToolConfig {
@@ -143,9 +154,13 @@ func (t Tool) ToConfig() tools.ToolConfig {
 }
 
 func (t Tool) GetAuthTokenHeaderName(resourceMgr tools.SourceProvider) (string, error) {
-	return "Authorization", nil
+	source, err := tools.GetCompatibleSource[compatibleSource](resourceMgr, t.Source, t.Name, t.Type)
+	if err != nil {
+		return "", err
+	}
+	return source.GetAuthTokenHeaderName(), nil
 }
 
 func (t Tool) GetParameters() parameters.Parameters {
-	return t.Parameters
+	return t.AllParams
 }

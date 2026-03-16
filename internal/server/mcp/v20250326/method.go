@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/googleapis/genai-toolbox/internal/prompts"
 	"github.com/googleapis/genai-toolbox/internal/server/mcp/jsonrpc"
@@ -124,7 +125,7 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, resourceMgr *re
 		errMsg := fmt.Errorf("error during invocation: %w", err)
 		return jsonrpc.NewError(id, jsonrpc.INTERNAL_ERROR, errMsg.Error(), nil), errMsg
 	}
-	accessToken := tools.AccessToken(header.Get(authTokenHeadername))
+	accessToken := tools.AccessToken(strings.TrimSpace(header.Get(authTokenHeadername)))
 
 	// Check if this specific tool requires the standard authorization header
 	clientAuth, err := tool.RequiresClientAuthorization(resourceMgr)
@@ -135,7 +136,7 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, resourceMgr *re
 	if clientAuth {
 		if accessToken == "" {
 			err := util.NewClientServerError(
-				"missing access token in the 'Authorization' header",
+				fmt.Sprintf("missing access token in the %q header", authTokenHeadername),
 				http.StatusUnauthorized,
 				nil,
 			)
@@ -211,6 +212,9 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, resourceMgr *re
 	}
 
 	// run tool invocation and generate response.
+	if header != nil {
+		ctx = util.WithClientTags(ctx, header.Get("X-Trino-Client-Tags"))
+	}
 	results, err := tool.Invoke(ctx, resourceMgr, params, accessToken)
 	if err != nil {
 		var tbErr util.ToolboxError

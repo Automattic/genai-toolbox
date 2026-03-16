@@ -253,7 +253,7 @@ func TestMcpEndpointWithoutInitialized(t *testing.T) {
 				"id":      "tools-call-tool5",
 				"error": map[string]any{
 					"code":    -32600.0,
-					"message": "missing access token in the 'Authorization' header",
+					"message": `missing access token in the "Authorization" header`,
 				},
 			},
 		},
@@ -857,7 +857,7 @@ func TestMcpEndpoint(t *testing.T) {
 						"id":      "tools-call-tool5",
 						"error": map[string]any{
 							"code":    -32600.0,
-							"message": "missing access token in the 'Authorization' header",
+							"message": `missing access token in the "Authorization" header`,
 						},
 					},
 				},
