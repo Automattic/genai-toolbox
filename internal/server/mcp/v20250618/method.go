@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/googleapis/mcp-toolbox/internal/prompts"
@@ -179,7 +180,7 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, toolset tools.T
 		errMsg := fmt.Errorf("error during invocation: %w", err)
 		return jsonrpc.NewError(id, jsonrpc.INTERNAL_ERROR, errMsg.Error(), nil), errMsg
 	}
-	accessToken := tools.AccessToken(header.Get(authTokenHeadername))
+	accessToken := tools.AccessToken(strings.TrimSpace(header.Get(authTokenHeadername)))
 
 	// Check if this specific tool requires the standard authorization header
 	clientAuth, err := tool.RequiresClientAuthorization(resourceMgr)
@@ -269,6 +270,9 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, toolset tools.T
 	instrumentation, instrumentationErr := util.InstrumentationFromContext(ctx)
 
 	// run tool invocation and generate response.
+	if header != nil {
+		ctx = util.WithClientTags(ctx, header.Get("X-Trino-Client-Tags"))
+	}
 	executionStart := time.Now()
 	results, err := tool.Invoke(ctx, resourceMgr, params, accessToken)
 	executionDuration := time.Since(executionStart).Seconds()

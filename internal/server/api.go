@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -134,9 +135,16 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract OAuth access token from the "Authorization" header (currently for
-	// BigQuery end-user credentials usage only)
-	accessToken := tools.AccessToken(r.Header.Get("Authorization"))
+	// Determine which header carries the access token. Most tools use
+	// "Authorization"; some (e.g. Trino with per-user auth) use a custom header.
+	authTokenHeaderName, err := tool.GetAuthTokenHeaderName(s.ResourceMgr)
+	if err != nil {
+		errMsg := fmt.Errorf("error during invocation: %w", err)
+		s.logger.DebugContext(ctx, errMsg.Error())
+		_ = render.Render(w, r, newErrResponse(errMsg, http.StatusNotFound))
+		return
+	}
+	accessToken := tools.AccessToken(strings.TrimSpace(r.Header.Get(authTokenHeaderName)))
 
 	// Check if this specific tool requires the standard authorization header
 	clientAuth, err := tool.RequiresClientAuthorization(s.ResourceMgr)
@@ -234,6 +242,8 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Forward per-request client tags (e.g. X-Trino-Client-Tags) to the source.
+	ctx = util.WithClientTags(ctx, r.Header.Get("X-Trino-Client-Tags"))
 	res, err := tool.Invoke(ctx, s.ResourceMgr, params, accessToken)
 
 	// Determine what error to return to the users.

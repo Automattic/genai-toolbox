@@ -122,6 +122,24 @@ func UserAgentFromContext(ctx context.Context) (string, error) {
 	}
 }
 
+// clientTagsKey is the key used to store per-request client tags within context.
+const clientTagsKey contextKey = "clientTags"
+
+// WithClientTags stores a client tags string (e.g. the X-Trino-Client-Tags
+// request header) in the context for downstream sources to read.
+func WithClientTags(ctx context.Context, tags string) context.Context {
+	return context.WithValue(ctx, clientTagsKey, tags)
+}
+
+// ClientTagsFromContext retrieves the client tags string from the context,
+// returning an empty string when none is present.
+func ClientTagsFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(clientTagsKey).(string); ok {
+		return v
+	}
+	return ""
+}
+
 type UserAgentRoundTripper struct {
 	userAgent string
 	next      http.RoundTripper
