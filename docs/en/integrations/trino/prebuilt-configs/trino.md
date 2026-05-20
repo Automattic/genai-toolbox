@@ -35,5 +35,5 @@ description: "Details of the Trino prebuilt configuration."
 By default the prebuilt config runs in read-only mode. Identifier parameters
 (catalog, schema, table) are validated against an allowlist regex, and the
 `query_plan` tool blocks semicolons and SQL comment syntax. See the
-[Trino Source](../source/) page for details on read-only enforcement, per-user
+[Trino Source](../source.md) page for details on read-only enforcement, per-user
 identity propagation, and client tag forwarding.
