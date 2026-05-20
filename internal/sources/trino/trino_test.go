@@ -177,6 +177,13 @@ func Test_checkReadOnly(t *testing.T) {
 		{name: "allows DESCRIBE", readOnly: true, statement: "DESCRIBE my_table", wantErr: false},
 		{name: "allows EXPLAIN", readOnly: true, statement: "EXPLAIN SELECT 1", wantErr: false},
 		{name: "allows VALUES", readOnly: true, statement: "VALUES 1, 2, 3", wantErr: false},
+
+		// EXPLAIN ANALYZE executes the inner statement and must be blocked
+		{name: "blocks EXPLAIN ANALYZE SELECT", readOnly: true, statement: "EXPLAIN ANALYZE SELECT 1", wantErr: true},
+		{name: "blocks EXPLAIN ANALYZE INSERT", readOnly: true, statement: "EXPLAIN ANALYZE INSERT INTO t VALUES (1)", wantErr: true},
+		{name: "blocks EXPLAIN ANALYZE lowercase", readOnly: true, statement: "explain analyze select 1", wantErr: true},
+		{name: "blocks EXPLAIN ANALYZE extra whitespace", readOnly: true, statement: "EXPLAIN   ANALYZE SELECT 1", wantErr: true},
+		{name: "allows EXPLAIN ANALYZE inside identifier", readOnly: true, statement: "SELECT explain_analyze FROM t", wantErr: false},
 		{name: "allows leading whitespace", readOnly: true, statement: "  SELECT 1", wantErr: false},
 
 		// Read-only mode enabled: blocked statements
@@ -360,7 +367,7 @@ func TestTrinoDriverSendsImpersonationHeader(t *testing.T) {
 		mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":      "test_query_1",
 			"infoUri": "http://localhost/query/test_query_1",
 			"stats": map[string]any{

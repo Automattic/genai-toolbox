@@ -222,6 +222,11 @@ var readOnlyAllowedPrefixes = []string{
 	"VALUES",
 }
 
+// explainAnalyzeRe matches EXPLAIN ANALYZE, which (unlike plain EXPLAIN) executes
+// the inner statement and must be blocked in read-only mode, otherwise
+// EXPLAIN ANALYZE INSERT/DELETE/... would bypass the DML/DDL block.
+var explainAnalyzeRe = regexp.MustCompile(`(?i)^EXPLAIN\s+ANALYZE\b`)
+
 // normalizeResult holds the output of normalizeSQL: the cleaned SQL text and
 // whether a semicolon was found outside string literals and comments.
 type normalizeResult struct {
@@ -326,6 +331,9 @@ func checkReadOnly(readOnly bool, statement string) error {
 	result := normalizeSQL(statement)
 	if result.hasSemicolon {
 		return fmt.Errorf("statement blocked by read-only mode: multiple statements (semicolons) are not allowed")
+	}
+	if explainAnalyzeRe.MatchString(result.normalized) {
+		return fmt.Errorf("statement blocked by read-only mode: EXPLAIN ANALYZE executes the statement and is not allowed")
 	}
 	for _, prefix := range readOnlyAllowedPrefixes {
 		if len(result.normalized) >= len(prefix) && strings.EqualFold(result.normalized[:len(prefix)], prefix) {
