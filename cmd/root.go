@@ -120,7 +120,6 @@ func NewCommand(opts *internal.ToolboxOptions) *cobra.Command {
 	internal.ServeFlags(flags, opts)
 	flags.BoolVar(&opts.Cfg.DisableReload, "disable-reload", false, "Disables dynamic reloading of tools file.")
 	flags.IntVar(&opts.Cfg.PollInterval, "poll-interval", 0, "Specifies the polling frequency (seconds) for configuration file updates.")
-	flags.StringVar(&opts.Cfg.PublicURL, "public-url", "", "Public URL of this server (for OAuth metadata). Defaults to http://<address>:<port>.")
 	// wrap RunE command so that we have access to original Command object
 	cmd.RunE = func(*cobra.Command, []string) error { return run(cmd, opts) }
 
