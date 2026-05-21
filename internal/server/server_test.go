@@ -1152,15 +1152,18 @@ func TestMCPAuthMiddleware(t *testing.T) {
 	}
 }
 
-func TestOAuthProxyAndMcpAuthConflict(t *testing.T) {
+// newOAuthConflictCtx builds a context with logger + instrumentation for the
+// NewServer conflict tests.
+func newOAuthConflictCtx(t *testing.T) context.Context {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 
 	otelShutdown, err := telemetry.SetupOTel(ctx, "0.0.0", "", false, "toolbox")
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err)
 	}
-	defer func() { _ = otelShutdown(ctx) }()
+	t.Cleanup(func() { _ = otelShutdown(ctx) })
 
 	testLogger, err := log.NewStdLogger(os.Stdout, os.Stderr, "info")
 	if err != nil {
@@ -1171,106 +1174,85 @@ func TestOAuthProxyAndMcpAuthConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %s", err)
 	}
-	ctx = util.WithInstrumentation(ctx, instrumentation)
-
-	// Mock OIDC server so the generic authService initializes.
-	mockOIDC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/.well-known/openid-configuration":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"issuer": "http://%s", "jwks_uri": "http://%s/jwks"}`, r.Host, r.Host)
-		case "/jwks":
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"keys": []}`)
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer mockOIDC.Close()
-
-	cfg := server.ServerConfig{
-		Version:      "0.0.0",
-		Address:      "127.0.0.1",
-		Port:         5009,
-		ToolboxUrl:   "https://my-toolbox.example.com",
-		PublicURL:    "https://my-toolbox.example.com",
-		AllowedHosts: []string{"*"},
-		SourceConfigs: map[string]sources.SourceConfig{
-			"looker-source": looker.Config{
-				Name:           "looker-source",
-				Type:           "looker",
-				BaseURL:        "https://looker.example.com",
-				Timeout:        "600s",
-				UseClientOAuth: "true",
-				OAuthBaseURL:   "https://looker.example.com",
-				OAuthClientID:  "mcp-looker",
-			},
-		},
-		AuthServiceConfigs: map[string]auth.AuthServiceConfig{
-			"generic1": generic.Config{
-				Name:                "generic1",
-				Type:                generic.AuthServiceType,
-				McpEnabled:          true,
-				AuthorizationServer: mockOIDC.URL,
-			},
-		},
-	}
-
-	_, err = server.NewServer(ctx, cfg)
-	if err == nil {
-		t.Fatal("expected NewServer to fail when OAuth proxy and MCP auth are both configured")
-	}
-	if !strings.Contains(err.Error(), "cannot be combined") {
-		t.Errorf("error %q does not mention the OAuth-proxy / MCP-auth conflict", err.Error())
-	}
+	return util.WithInstrumentation(ctx, instrumentation)
 }
 
-func TestOAuthProxyAndMcpPrmFileConflict(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	otelShutdown, err := telemetry.SetupOTel(ctx, "0.0.0", "", false, "toolbox")
-	if err != nil {
-		t.Fatalf("unexpected error: %s", err)
+func TestOAuthProxyConflicts(t *testing.T) {
+	lookerProxySource := map[string]sources.SourceConfig{
+		"looker-source": looker.Config{
+			Name:           "looker-source",
+			Type:           "looker",
+			BaseURL:        "https://looker.example.com",
+			Timeout:        "600s",
+			UseClientOAuth: "true",
+			OAuthBaseURL:   "https://looker.example.com",
+			OAuthClientID:  "mcp-looker",
+		},
 	}
-	defer func() { _ = otelShutdown(ctx) }()
 
-	testLogger, err := log.NewStdLogger(os.Stdout, os.Stderr, "info")
-	if err != nil {
-		t.Fatalf("unexpected error: %s", err)
-	}
-	ctx = util.WithLogger(ctx, testLogger)
-	instrumentation, err := telemetry.CreateTelemetryInstrumentation("0.0.0")
-	if err != nil {
-		t.Fatalf("unexpected error: %s", err)
-	}
-	ctx = util.WithInstrumentation(ctx, instrumentation)
-
-	cfg := server.ServerConfig{
-		Version:      "0.0.0",
-		Address:      "127.0.0.1",
-		Port:         5010,
-		PublicURL:    "https://my-toolbox.example.com",
-		McpPrmFile:   "/nonexistent/prm.json",
-		AllowedHosts: []string{"*"},
-		SourceConfigs: map[string]sources.SourceConfig{
-			"looker-source": looker.Config{
-				Name:           "looker-source",
-				Type:           "looker",
-				BaseURL:        "https://looker.example.com",
-				Timeout:        "600s",
-				UseClientOAuth: "true",
-				OAuthBaseURL:   "https://looker.example.com",
-				OAuthClientID:  "mcp-looker",
+	tests := []struct {
+		name      string
+		port      int
+		errSubstr string
+		mutate    func(t *testing.T, cfg *server.ServerConfig)
+	}{
+		{
+			name:      "with MCP server-wide auth",
+			port:      5009,
+			errSubstr: "cannot be combined",
+			mutate: func(t *testing.T, cfg *server.ServerConfig) {
+				// Mock OIDC server so the generic authService initializes.
+				mockOIDC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/.well-known/openid-configuration":
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprintf(w, `{"issuer": "http://%s", "jwks_uri": "http://%s/jwks"}`, r.Host, r.Host)
+					case "/jwks":
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprint(w, `{"keys": []}`)
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				}))
+				t.Cleanup(mockOIDC.Close)
+				cfg.AuthServiceConfigs = map[string]auth.AuthServiceConfig{
+					"generic1": generic.Config{
+						Name:                "generic1",
+						Type:                generic.AuthServiceType,
+						McpEnabled:          true,
+						AuthorizationServer: mockOIDC.URL,
+					},
+				}
+			},
+		},
+		{
+			name:      "with --mcp-prm-file",
+			port:      5010,
+			errSubstr: "mcp-prm-file",
+			mutate: func(t *testing.T, cfg *server.ServerConfig) {
+				cfg.McpPrmFile = "/nonexistent/prm.json"
 			},
 		},
 	}
 
-	_, err = server.NewServer(ctx, cfg)
-	if err == nil {
-		t.Fatal("expected NewServer to fail when OAuth proxy and --mcp-prm-file are both configured")
-	}
-	if !strings.Contains(err.Error(), "mcp-prm-file") {
-		t.Errorf("error %q does not mention the --mcp-prm-file conflict", err.Error())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newOAuthConflictCtx(t)
+			cfg := server.ServerConfig{
+				Version:       "0.0.0",
+				Address:       "127.0.0.1",
+				Port:          tc.port,
+				PublicURL:     "https://my-toolbox.example.com",
+				AllowedHosts:  []string{"*"},
+				SourceConfigs: lookerProxySource,
+			}
+			tc.mutate(t, &cfg)
+
+			if _, err := server.NewServer(ctx, cfg); err == nil {
+				t.Fatal("expected NewServer to fail when the OAuth proxy is combined with a competing auth gate")
+			} else if !strings.Contains(err.Error(), tc.errSubstr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.errSubstr)
+			}
+		})
 	}
 }

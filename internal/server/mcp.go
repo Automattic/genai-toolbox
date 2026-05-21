@@ -792,7 +792,7 @@ func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVers
 	// nil for STDIO transport, where OAuth does not apply.
 	if s.oauthConfig != nil && header != nil && baseMessage.Method != "ping" {
 		authHeader := strings.TrimSpace(header.Get("Authorization"))
-		if _, ok := bearerToken(authHeader); !ok {
+		if tok, perr := tools.AccessToken(authHeader).ParseBearerToken(); perr != nil || tok == "" {
 			err := util.NewClientServerError("authentication required", http.StatusUnauthorized, nil)
 			rpcErr := jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, err.Error(), nil)
 			span.SetStatus(codes.Error, err.Error())
@@ -914,19 +914,4 @@ func prmHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		s.logger.ErrorContext(r.Context(), fmt.Sprintf("Failed to encode PRM response: %v", err))
 		http.Error(w, "Failed to encode PRM response", http.StatusInternalServerError)
 	}
-}
-
-// bearerToken extracts the token from an "Authorization: Bearer <token>" header
-// value. It returns ok=false when the header is missing or malformed.
-func bearerToken(authHeader string) (string, bool) {
-	const prefix = "bearer "
-	authHeader = strings.TrimSpace(authHeader)
-	if len(authHeader) <= len(prefix) || !strings.EqualFold(authHeader[:len(prefix)], prefix) {
-		return "", false
-	}
-	token := strings.TrimSpace(authHeader[len(prefix):])
-	if token == "" {
-		return "", false
-	}
-	return token, true
 }

@@ -15,7 +15,9 @@ package looker
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -174,7 +176,7 @@ type Source struct {
 	AuthTokenHeaderName string
 
 	tokenCacheMu sync.Mutex
-	tokenCache   map[string]time.Time // bearer token -> validation expiry
+	tokenCache   map[string]time.Time // sha256(auth header) -> validation expiry
 }
 
 // oauthTokenCacheTTL bounds how long a validated OAuth token is trusted before
@@ -233,9 +235,11 @@ func (s *Source) ValidateOAuthToken(ctx context.Context, authHeader string) erro
 		return fmt.Errorf("empty access token")
 	}
 	now := time.Now()
+	// Key the cache by a hash so raw bearer tokens aren't held in memory.
+	key := hashToken(authHeader)
 
 	s.tokenCacheMu.Lock()
-	if exp, ok := s.tokenCache[authHeader]; ok && now.Before(exp) {
+	if exp, ok := s.tokenCache[key]; ok && now.Before(exp) {
 		s.tokenCacheMu.Unlock()
 		return nil
 	}
@@ -251,18 +255,26 @@ func (s *Source) ValidateOAuthToken(ctx context.Context, authHeader string) erro
 
 	s.tokenCacheMu.Lock()
 	defer s.tokenCacheMu.Unlock()
-	if s.tokenCache == nil || len(s.tokenCache) >= oauthTokenCacheMax {
-		// Bounded cache: reset rather than track LRU. Cheap and rare.
+	if s.tokenCache == nil {
 		s.tokenCache = make(map[string]time.Time)
-	} else {
-		for t, e := range s.tokenCache {
-			if !now.Before(e) {
-				delete(s.tokenCache, t)
-			}
+	}
+	for t, e := range s.tokenCache {
+		if !now.Before(e) {
+			delete(s.tokenCache, t)
 		}
 	}
-	s.tokenCache[authHeader] = now.Add(oauthTokenCacheTTL)
+	if len(s.tokenCache) >= oauthTokenCacheMax {
+		// Still at capacity after evicting expired entries: reset rather than
+		// track LRU. Cheap and rare.
+		s.tokenCache = make(map[string]time.Time)
+	}
+	s.tokenCache[key] = now.Add(oauthTokenCacheTTL)
 	return nil
+}
+
+func hashToken(authHeader string) string {
+	sum := sha256.Sum256([]byte(authHeader))
+	return hex.EncodeToString(sum[:])
 }
 
 func (s *Source) UseClientAuthorization() bool {

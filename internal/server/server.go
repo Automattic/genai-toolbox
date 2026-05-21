@@ -402,8 +402,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 			oauthSourceName = name
 			baseURL := cfg.PublicURL
 			if baseURL == "" {
-				// Warn if the bind address is non-routable (0.0.0.0, 127.0.0.1, etc.)
-				if cfg.Address == "0.0.0.0" || cfg.Address == "" || cfg.Address == "127.0.0.1" || cfg.Address == "localhost" {
+				if isNonRoutableAddr(cfg.Address) {
 					l.WarnContext(ctx, fmt.Sprintf("OAuth is active but --public-url is not set and bind address is %q. OAuth metadata will default to http://%s based on the bind address. If this URL is not externally reachable (e.g. behind a proxy, load balancer, or ingress), set --public-url to the externally reachable URL that clients use.", cfg.Address, addr))
 				}
 				baseURL = fmt.Sprintf("http://%s", addr)
@@ -501,9 +500,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		}
 	}
 
-	// Register route if auth is enabled or a manual file is provided.
-	// When the OAuth proxy is active it owns this endpoint (advertising the
-	// toolbox itself as the authorization server), so skip the native handler
+	// The OAuth proxy owns this endpoint when active, so skip the native handler
 	// to avoid registering the route twice.
 	if (mcpAuthEnabled || s.mcpPrmFile != "") && oauthCfg == nil {
 		r.Get("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, req *http.Request) {
@@ -668,6 +665,17 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) Addr() string {
 	return s.listener.Addr().String()
+}
+
+// isNonRoutableAddr reports whether addr is a bind address that is unlikely to
+// be externally reachable, so OAuth metadata derived from it would be wrong.
+func isNonRoutableAddr(addr string) bool {
+	switch addr {
+	case "", "0.0.0.0", "127.0.0.1", "localhost":
+		return true
+	default:
+		return false
+	}
 }
 
 // WarnIfOAuthConfigChanged checks whether the OAuth proxy configuration derived
