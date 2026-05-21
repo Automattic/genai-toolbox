@@ -315,7 +315,7 @@ func TestOAuthTokenProxy(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"access_token": "looker-access-token",
 			"token_type":   "Bearer",
 		})
@@ -686,7 +686,7 @@ func TestOAuthFullDiscoveryFlow(t *testing.T) {
 	// Mock upstream token server
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"access_token":  "final-access-token",
 			"token_type":    "Bearer",
 			"refresh_token": "refresh-123",
@@ -736,7 +736,7 @@ func TestOAuthFullDiscoveryFlow(t *testing.T) {
 		t.Fatalf("step 2 failed: %s", err)
 	}
 	var protectedResource map[string]any
-	json.NewDecoder(resp2.Body).Decode(&protectedResource)
+	_ = json.NewDecoder(resp2.Body).Decode(&protectedResource)
 	resp2.Body.Close()
 
 	authServers := protectedResource["authorization_servers"].([]any)
@@ -748,7 +748,7 @@ func TestOAuthFullDiscoveryFlow(t *testing.T) {
 		t.Fatalf("step 3 failed: %s", err)
 	}
 	var authServerMeta map[string]any
-	json.NewDecoder(resp3.Body).Decode(&authServerMeta)
+	_ = json.NewDecoder(resp3.Body).Decode(&authServerMeta)
 	resp3.Body.Close()
 
 	if authServerMeta["issuer"] != authServerURL {
@@ -770,7 +770,7 @@ func TestOAuthFullDiscoveryFlow(t *testing.T) {
 		t.Fatalf("step 4 failed: %s", err)
 	}
 	var regResponse map[string]any
-	json.NewDecoder(resp4.Body).Decode(&regResponse)
+	_ = json.NewDecoder(resp4.Body).Decode(&regResponse)
 	resp4.Body.Close()
 
 	clientID := regResponse["client_id"].(string)
@@ -812,7 +812,7 @@ func TestOAuthFullDiscoveryFlow(t *testing.T) {
 		t.Fatalf("step 6 failed: %s", err)
 	}
 	var tokenResponse map[string]string
-	json.NewDecoder(resp6.Body).Decode(&tokenResponse)
+	_ = json.NewDecoder(resp6.Body).Decode(&tokenResponse)
 	resp6.Body.Close()
 
 	if tokenResponse["access_token"] != "final-access-token" {

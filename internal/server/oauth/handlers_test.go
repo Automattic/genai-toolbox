@@ -186,7 +186,7 @@ func TestTokenHandler(t *testing.T) {
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"access_token": "test-access-token",
 				"token_type":   "Bearer",
 			})
@@ -236,7 +236,7 @@ func TestTokenHandler(t *testing.T) {
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"access_token": "confidential-token",
 				"token_type":   "Bearer",
 			})

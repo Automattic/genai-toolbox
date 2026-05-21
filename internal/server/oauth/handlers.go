@@ -146,7 +146,7 @@ func registerHandler(cfg *Config) http.HandlerFunc {
 			return
 		}
 
-		redirectURIs, _ := requestBody["redirect_uris"]
+		redirectURIs := requestBody["redirect_uris"]
 
 		responseBody := map[string]any{
 			"client_id":                  cfg.Provider.ClientID,
