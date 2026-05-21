@@ -154,3 +154,8 @@ access token to the Looker API per request.
 
 Set [`--public-url`](../../reference/cli.md) to the externally reachable URL clients use, since it
 is advertised in the OAuth metadata. The OAuth proxy is HTTP-only (not available over stdio).
+
+Incoming bearer tokens are validated against Looker (the `me` API call) before any MCP method runs,
+with a short-lived cache to bound upstream calls. The OAuth routes and middleware are bound at
+startup; changing the OAuth configuration requires a restart (a dynamic config reload logs a warning
+and does not re-mount them).

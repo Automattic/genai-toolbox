@@ -135,7 +135,7 @@ func testOAuthConfig(baseURL string) *oauth.Config {
 
 // runMcpInitialize sends the MCP initialize + notifications/initialized handshake
 // and returns the session ID (if any). Requests go to /mcp.
-func runMcpInitialize(t *testing.T, ts *httptest.Server) string {
+func runMcpInitialize(t *testing.T, ts *httptest.Server, token string) string {
 	t.Helper()
 	initBody := map[string]any{
 		"jsonrpc": jsonrpcVersion,
@@ -148,7 +148,7 @@ func runMcpInitialize(t *testing.T, ts *httptest.Server) string {
 	// Include Authorization header so that initialize succeeds when OAuth is
 	// configured (the gate requires auth for all methods including initialize).
 	initHeader := map[string]string{
-		"Authorization": "Bearer init-token",
+		"Authorization": "Bearer " + token,
 	}
 	resp, _, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal), initHeader)
 	if err != nil {
@@ -424,7 +424,7 @@ func TestMcpWithOAuth_NoWWWAuthenticateOnSuccess(t *testing.T) {
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
-	runMcpInitialize(t, ts)
+	runMcpInitialize(t, ts, "init-token")
 
 	// tool1 doesn't require tool-level auth, so the call should succeed without WWW-Authenticate.
 	// An Authorization header is still required at the gate level when OAuth is configured.
@@ -466,7 +466,7 @@ func TestMcpWithOAuth_ToolsListRequiresAuth(t *testing.T) {
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
-	runMcpInitialize(t, ts)
+	runMcpInitialize(t, ts, "init-token")
 
 	reqBody := jsonrpc.JSONRPCRequest{
 		Jsonrpc: jsonrpcVersion,
@@ -520,6 +520,67 @@ func TestMcpWithOAuth_ToolsListRequiresAuth(t *testing.T) {
 	}
 }
 
+func TestMcpWithOAuth_TokenValidation(t *testing.T) {
+	oauthCfg := testOAuthConfig("http://localhost:5000")
+	// Only "good-token" is accepted by the validator.
+	oauthCfg.Validate = func(_ context.Context, token string) error {
+		if token != "good-token" {
+			return fmt.Errorf("token rejected")
+		}
+		return nil
+	}
+	r, shutdown := setUpServerWithOAuth(t, oauthCfg, []testutils.MockTool{tool1})
+	defer shutdown()
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	runMcpInitialize(t, ts, "good-token")
+
+	reqBody := jsonrpc.JSONRPCRequest{
+		Jsonrpc: jsonrpcVersion,
+		Id:      "tools-list",
+		Request: jsonrpc.Request{Method: "tools/list"},
+	}
+	reqMarshal, _ := json.Marshal(reqBody)
+
+	cases := []struct {
+		name       string
+		authHeader string
+		wantStatus int
+		wantMsg    string
+	}{
+		{name: "valid token", authHeader: "Bearer good-token", wantStatus: http.StatusOK},
+		{name: "invalid token rejected", authHeader: "Bearer bad-token", wantStatus: http.StatusUnauthorized, wantMsg: "invalid access token"},
+		{name: "malformed (no bearer scheme)", authHeader: "good-token", wantStatus: http.StatusUnauthorized, wantMsg: "authentication required"},
+		{name: "missing token", authHeader: "", wantStatus: http.StatusUnauthorized, wantMsg: "authentication required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			header := map[string]string{"MCP-Protocol-Version": protocolVersion20250618}
+			if tc.authHeader != "" {
+				header["Authorization"] = tc.authHeader
+			}
+			resp, body, err := runRequest(ts, http.MethodPost, "/mcp", bytes.NewBuffer(reqMarshal), header)
+			if err != nil {
+				t.Fatalf("request failed: %s", err)
+			}
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("status = %d, want %d", resp.StatusCode, tc.wantStatus)
+			}
+			if tc.wantMsg != "" {
+				var got map[string]any
+				if err := json.Unmarshal(body, &got); err != nil {
+					t.Fatalf("error unmarshalling body: %s", err)
+				}
+				errorObj, _ := got["error"].(map[string]any)
+				if errorObj == nil || errorObj["message"] != tc.wantMsg {
+					t.Errorf("error message = %v, want %q", got["error"], tc.wantMsg)
+				}
+			}
+		})
+	}
+}
+
 func TestMcpWithOAuth_SseNotHardBlocked(t *testing.T) {
 	oauthCfg := testOAuthConfig("http://localhost:5000")
 	r, shutdown := setUpServerWithOAuth(t, oauthCfg, []testutils.MockTool{tool1})
@@ -552,7 +613,7 @@ func TestMcpWithoutOAuth_NoWWWAuthenticateOnUnauthorized(t *testing.T) {
 	ts := httptest.NewServer(r)
 	defer ts.Close()
 
-	runMcpInitialize(t, ts)
+	runMcpInitialize(t, ts, "init-token")
 
 	reqBody := jsonrpc.JSONRPCRequest{
 		Jsonrpc: jsonrpcVersion,

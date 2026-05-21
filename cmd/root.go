@@ -147,6 +147,10 @@ func handleDynamicReload(ctx context.Context, toolsFile internal.Config, s *serv
 
 	s.ResourceMgr.SetResources(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, toolsetsMap, promptsMap, promptsetsMap)
 
+	// The OAuth proxy routes/middleware are bound at startup and are not
+	// re-mounted on reload, so warn if the reloaded config would change them.
+	s.WarnIfOAuthConfigChanged(ctx, sourcesMap)
+
 	return nil
 }
 

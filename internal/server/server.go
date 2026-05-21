@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -412,6 +413,11 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 				BaseURL:  baseURL,
 				Provider: provCfg,
 			}
+			// If the source can validate tokens against the upstream provider,
+			// wire it into the MCP auth gate so invalid tokens are rejected.
+			if validator, ok := src.(sources.OAuthTokenValidator); ok {
+				oauthCfg.Validate = validator.ValidateOAuthToken
+			}
 		}
 	}
 
@@ -647,4 +653,31 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) Addr() string {
 	return s.listener.Addr().String()
+}
+
+// WarnIfOAuthConfigChanged checks whether the OAuth proxy configuration derived
+// from a reloaded set of sources differs from the one computed at startup. The
+// OAuth discovery/proxy routes and middleware are mounted on the router at
+// startup and are not re-mounted on dynamic reload, so a change requires a
+// restart to take effect. This logs a warning rather than silently running
+// stale OAuth settings.
+func (s *Server) WarnIfOAuthConfigChanged(ctx context.Context, newSources map[string]sources.Source) {
+	var newProvider *sources.OAuthConfig
+	for _, src := range newSources {
+		if provider, ok := src.(sources.OAuthProvider); ok {
+			if pc := provider.OAuthProviderConfig(); pc != nil {
+				newProvider = pc
+				break
+			}
+		}
+	}
+
+	var curProvider *sources.OAuthConfig
+	if s.oauthConfig != nil {
+		curProvider = s.oauthConfig.Provider
+	}
+
+	if !reflect.DeepEqual(curProvider, newProvider) {
+		s.logger.WarnContext(ctx, "OAuth proxy configuration changed during reload; the OAuth discovery/proxy routes are bound at startup, so a restart is required for the change to take effect.")
+	}
 }

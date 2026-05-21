@@ -791,11 +791,22 @@ func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVers
 	// discovery flow). Ping is exempted as a lightweight health-check. header is
 	// nil for STDIO transport, where OAuth does not apply.
 	if s.oauthConfig != nil && header != nil && baseMessage.Method != "ping" {
-		if header.Get("Authorization") == "" {
+		token, ok := bearerToken(header.Get("Authorization"))
+		if !ok {
 			err := util.NewClientServerError("authentication required", http.StatusUnauthorized, nil)
 			rpcErr := jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, err.Error(), nil)
 			span.SetStatus(codes.Error, err.Error())
 			return "", rpcErr, err
+		}
+		// Validate the token against the upstream provider when supported.
+		if s.oauthConfig.Validate != nil {
+			if err := s.oauthConfig.Validate(ctx, token); err != nil {
+				logger.DebugContext(ctx, fmt.Sprintf("OAuth token validation failed: %v", err))
+				cse := util.NewClientServerError("invalid access token", http.StatusUnauthorized, nil)
+				rpcErr := jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, cse.Error(), nil)
+				span.SetStatus(codes.Error, cse.Error())
+				return "", rpcErr, cse
+			}
 		}
 	}
 
@@ -901,4 +912,19 @@ func prmHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 		s.logger.ErrorContext(r.Context(), fmt.Sprintf("Failed to encode PRM response: %v", err))
 		http.Error(w, "Failed to encode PRM response", http.StatusInternalServerError)
 	}
+}
+
+// bearerToken extracts the token from an "Authorization: Bearer <token>" header
+// value. It returns ok=false when the header is missing or malformed.
+func bearerToken(authHeader string) (string, bool) {
+	const prefix = "bearer "
+	authHeader = strings.TrimSpace(authHeader)
+	if len(authHeader) <= len(prefix) || !strings.EqualFold(authHeader[:len(prefix)], prefix) {
+		return "", false
+	}
+	token := strings.TrimSpace(authHeader[len(prefix):])
+	if token == "" {
+		return "", false
+	}
+	return token, true
 }

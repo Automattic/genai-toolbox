@@ -15,6 +15,8 @@
 package oauth
 
 import (
+	"context"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/googleapis/mcp-toolbox/internal/sources"
 )
@@ -23,6 +25,10 @@ import (
 type Config struct {
 	BaseURL  string               // external URL of this toolbox server
 	Provider *sources.OAuthConfig // from the source that implements OAuthProvider
+	// Validate verifies a bearer token against the upstream provider. It is nil
+	// when the provider source does not support token validation, in which case
+	// the MCP auth gate falls back to a presence/format check only.
+	Validate func(ctx context.Context, token string) error
 }
 
 // MountRoutes mounts OAuth discovery and proxy endpoints on the given router.

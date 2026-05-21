@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	geminidataanalytics "cloud.google.com/go/geminidataanalytics/apiv1beta"
@@ -163,7 +164,17 @@ type Source struct {
 	ApiSettings         *rtl.ApiSettings
 	TokenSource         oauth2.TokenSource
 	AuthTokenHeaderName string
+
+	tokenCacheMu sync.Mutex
+	tokenCache   map[string]time.Time // bearer token -> validation expiry
 }
+
+// oauthTokenCacheTTL bounds how long a validated OAuth token is trusted before
+// it is re-checked against Looker. oauthTokenCacheMax caps the cache size.
+const (
+	oauthTokenCacheTTL = 5 * time.Minute
+	oauthTokenCacheMax = 1024
+)
 
 func (s *Source) SourceType() string {
 	return SourceType
@@ -198,6 +209,46 @@ func (s *Source) OAuthProviderConfig() *sources.OAuthConfig {
 		Scopes:            scopes,
 		VerifySSL:         s.SslVerification,
 	}
+}
+
+// ValidateOAuthToken verifies the bearer token by calling the Looker API as the
+// token's user. Results are cached for a short TTL to bound upstream calls.
+// Implements sources.OAuthTokenValidator.
+func (s *Source) ValidateOAuthToken(ctx context.Context, token string) error {
+	if token == "" {
+		return fmt.Errorf("empty access token")
+	}
+	now := time.Now()
+
+	s.tokenCacheMu.Lock()
+	if exp, ok := s.tokenCache[token]; ok && now.Before(exp) {
+		s.tokenCacheMu.Unlock()
+		return nil
+	}
+	s.tokenCacheMu.Unlock()
+
+	sdk, err := s.GetLookerSDK(token)
+	if err != nil {
+		return fmt.Errorf("unable to build Looker session for token validation: %w", err)
+	}
+	if _, err := sdk.Me("", s.LookerApiSettings()); err != nil {
+		return fmt.Errorf("token rejected by Looker: %w", err)
+	}
+
+	s.tokenCacheMu.Lock()
+	defer s.tokenCacheMu.Unlock()
+	if s.tokenCache == nil || len(s.tokenCache) >= oauthTokenCacheMax {
+		// Bounded cache: reset rather than track LRU. Cheap and rare.
+		s.tokenCache = make(map[string]time.Time)
+	} else {
+		for t, e := range s.tokenCache {
+			if !now.Before(e) {
+				delete(s.tokenCache, t)
+			}
+		}
+	}
+	s.tokenCache[token] = now.Add(oauthTokenCacheTTL)
+	return nil
 }
 
 func (s *Source) UseClientAuthorization() bool {

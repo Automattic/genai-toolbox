@@ -72,6 +72,14 @@ type OAuthProvider interface {
 	OAuthProviderConfig() *OAuthConfig
 }
 
+// OAuthTokenValidator is an optional interface for OAuth proxy sources that can
+// validate a bearer token against the upstream provider. When implemented, the
+// MCP auth gate uses it to reject invalid tokens instead of merely checking for
+// the presence of an Authorization header.
+type OAuthTokenValidator interface {
+	ValidateOAuthToken(ctx context.Context, token string) error
+}
+
 // OAuthConfig holds the OAuth configuration for a source that acts as an OAuth proxy.
 type OAuthConfig struct {
 	AuthorizeEndpoint string   // full URL of the upstream authorize endpoint (e.g. https://looker.example.com/auth)
