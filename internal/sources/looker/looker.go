@@ -211,23 +211,24 @@ func (s *Source) OAuthProviderConfig() *sources.OAuthConfig {
 	}
 }
 
-// ValidateOAuthToken verifies the bearer token by calling the Looker API as the
-// token's user. Results are cached for a short TTL to bound upstream calls.
-// Implements sources.OAuthTokenValidator.
-func (s *Source) ValidateOAuthToken(ctx context.Context, token string) error {
-	if token == "" {
+// ValidateOAuthToken verifies the access token by calling the Looker API as the
+// token's user. authHeader is the full "Bearer <token>" Authorization header
+// value, matching what GetLookerSDK forwards upstream. Results are cached for a
+// short TTL to bound upstream calls. Implements sources.OAuthTokenValidator.
+func (s *Source) ValidateOAuthToken(ctx context.Context, authHeader string) error {
+	if authHeader == "" {
 		return fmt.Errorf("empty access token")
 	}
 	now := time.Now()
 
 	s.tokenCacheMu.Lock()
-	if exp, ok := s.tokenCache[token]; ok && now.Before(exp) {
+	if exp, ok := s.tokenCache[authHeader]; ok && now.Before(exp) {
 		s.tokenCacheMu.Unlock()
 		return nil
 	}
 	s.tokenCacheMu.Unlock()
 
-	sdk, err := s.GetLookerSDK(token)
+	sdk, err := s.GetLookerSDK(authHeader)
 	if err != nil {
 		return fmt.Errorf("unable to build Looker session for token validation: %w", err)
 	}
@@ -247,7 +248,7 @@ func (s *Source) ValidateOAuthToken(ctx context.Context, token string) error {
 			}
 		}
 	}
-	s.tokenCache[token] = now.Add(oauthTokenCacheTTL)
+	s.tokenCache[authHeader] = now.Add(oauthTokenCacheTTL)
 	return nil
 }
 

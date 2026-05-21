@@ -791,16 +791,18 @@ func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVers
 	// discovery flow). Ping is exempted as a lightweight health-check. header is
 	// nil for STDIO transport, where OAuth does not apply.
 	if s.oauthConfig != nil && header != nil && baseMessage.Method != "ping" {
-		token, ok := bearerToken(header.Get("Authorization"))
-		if !ok {
+		authHeader := strings.TrimSpace(header.Get("Authorization"))
+		if _, ok := bearerToken(authHeader); !ok {
 			err := util.NewClientServerError("authentication required", http.StatusUnauthorized, nil)
 			rpcErr := jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, err.Error(), nil)
 			span.SetStatus(codes.Error, err.Error())
 			return "", rpcErr, err
 		}
-		// Validate the token against the upstream provider when supported.
+		// Validate the token against the upstream provider when supported. The
+		// full "Bearer <token>" header value is passed through, since that is
+		// what sources forward to the upstream API (see GetLookerSDK).
 		if s.oauthConfig.Validate != nil {
-			if err := s.oauthConfig.Validate(ctx, token); err != nil {
+			if err := s.oauthConfig.Validate(ctx, authHeader); err != nil {
 				logger.DebugContext(ctx, fmt.Sprintf("OAuth token validation failed: %v", err))
 				cse := util.NewClientServerError("invalid access token", http.StatusUnauthorized, nil)
 				rpcErr := jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, cse.Error(), nil)

@@ -16,6 +16,9 @@ package looker_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -23,6 +26,7 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/sources"
 	"github.com/googleapis/mcp-toolbox/internal/sources/looker"
 	"github.com/googleapis/mcp-toolbox/internal/testutils"
+	"github.com/looker-open-source/sdk-codegen/go/rtl"
 )
 
 func TestParseFromYamlLooker(t *testing.T) {
@@ -114,5 +118,44 @@ func TestFailParseFromYaml(t *testing.T) {
 				t.Fatalf("unexpected error: got %q, want %q", errStr, tc.err)
 			}
 		})
+	}
+}
+
+func TestValidateOAuthTokenForwardsBearerHeader(t *testing.T) {
+	var mu sync.Mutex
+	var gotAuth string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if a := r.Header.Get("Authorization"); a != "" {
+			gotAuth = a
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"1"}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	s := &looker.Source{
+		Config: looker.Config{
+			Name:           "t",
+			BaseURL:        ts.URL,
+			UseClientOAuth: "true",
+		},
+		ApiSettings: &rtl.ApiSettings{
+			BaseUrl:    ts.URL,
+			ApiVersion: "4.0",
+			VerifySsl:  false,
+			Timeout:    30,
+		},
+	}
+
+	if err := s.ValidateOAuthToken(context.Background(), "Bearer abc123"); err != nil {
+		t.Fatalf("ValidateOAuthToken returned error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotAuth != "Bearer abc123" {
+		t.Errorf("Authorization header sent to Looker = %q, want %q (the full Bearer header must be forwarded)", gotAuth, "Bearer abc123")
 	}
 }

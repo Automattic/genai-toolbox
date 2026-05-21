@@ -522,9 +522,10 @@ func TestMcpWithOAuth_ToolsListRequiresAuth(t *testing.T) {
 
 func TestMcpWithOAuth_TokenValidation(t *testing.T) {
 	oauthCfg := testOAuthConfig("http://localhost:5000")
-	// Only "good-token" is accepted by the validator.
-	oauthCfg.Validate = func(_ context.Context, token string) error {
-		if token != "good-token" {
+	// The validator receives the full "Bearer <token>" header value (matching
+	// what sources forward upstream). Only "Bearer good-token" is accepted.
+	oauthCfg.Validate = func(_ context.Context, authHeader string) error {
+		if authHeader != "Bearer good-token" {
 			return fmt.Errorf("token rejected")
 		}
 		return nil
