@@ -33,6 +33,7 @@ description: >
 |              | `--allowed-hosts`          | Specifies a list of hosts permitted to access this server to prevent DNS rebinding attacks.                                                                               | `*`         |
 |              | `--user-agent-metadata`    | Appends additional metadata to the User-Agent.                                                                                                                            |             |
 |              | `--poll-interval`          | Specifies the polling frequency (seconds) for configuration file updates.                                                                                                 | `0`         |
+|              | `--public-url`             | Public URL of this server, used in OAuth metadata when a source acts as an OAuth proxy (e.g. Looker). Defaults to `http://<address>:<port>`.                               |             |
 | `-v`         | `--version`                | version for toolbox                                                                                                                                                       |             |
 
 ## Sub Commands

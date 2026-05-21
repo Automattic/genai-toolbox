@@ -134,3 +134,23 @@ instead of hardcoding your secrets into the configuration file.
 | show_hidden_models   |  string  |    false     | Show or hide hidden models. (default: true)                                                                                                         |
 | show_hidden_explores |  string  |    false     | Show or hide hidden explores. (default: true)                                                                                                       |
 | show_hidden_fields   |  string  |    false     | Show or hide hidden fields. (default: true)                                                                                                         |
+| oauth_base_url       |  string  |    false     | Public Looker URL used for OAuth redirects (e.g. `https://looker.example.com`). Enables the OAuth proxy when set; requires `oauth_client_id`. See [OAuth proxy](#oauth-proxy). |
+| oauth_client_id      |  string  |    false     | OAuth client ID pre-registered in Looker. Required when `oauth_base_url` is set.                                                                    |
+| oauth_client_secret  |  string  |    false     | OAuth client secret. Leave empty for public (PKCE) clients.                                                                                          |
+| oauth_token_endpoint |  string  |    false     | Override for the upstream token endpoint. Defaults to `<base_url>/api/token`.                                                                        |
+| oauth_scopes         | []string |    false     | OAuth scopes requested. Defaults to `["cors_api"]`.                                                                                                  |
+
+### OAuth proxy
+
+When `use_client_oauth` is enabled and `oauth_base_url`/`oauth_client_id` are set, Toolbox
+exposes OAuth discovery and proxy endpoints (RFC 8414, RFC 9728) and advertises itself as the
+authorization server: `/.well-known/oauth-protected-resource`,
+`/.well-known/oauth-authorization-server`, `/authorize`, `/token`, and `/register`. This lets MCP
+clients that rely on automatic OAuth discovery and Dynamic Client Registration (e.g. Claude Code,
+Cursor) authenticate against Looker, which does not itself publish authorization-server metadata or
+support RFC 7591. Toolbox proxies `/authorize` and `/token` to Looker with the configured
+`oauth_client_id` (and `oauth_client_secret`) injected server-side, then forwards the resulting
+access token to the Looker API per request.
+
+Set [`--public-url`](../../reference/cli.md) to the externally reachable URL clients use, since it
+is advertised in the OAuth metadata. The OAuth proxy is HTTP-only (not available over stdio).
