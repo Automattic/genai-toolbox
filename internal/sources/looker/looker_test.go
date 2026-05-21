@@ -248,3 +248,26 @@ func TestOAuthProviderConfigScopes(t *testing.T) {
 		})
 	}
 }
+
+func TestUseClientAuthorization(t *testing.T) {
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"", false},
+		{"   ", false},
+		{"false", false},
+		{"False", false},
+		{"true", true},
+		{"True", true},
+		{"X-Looker-Auth", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.value, func(t *testing.T) {
+			s := &looker.Source{Config: looker.Config{UseClientOAuth: tc.value}}
+			if got := s.UseClientAuthorization(); got != tc.want {
+				t.Errorf("UseClientAuthorization(%q) = %v, want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+}

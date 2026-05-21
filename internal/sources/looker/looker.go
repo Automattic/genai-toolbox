@@ -139,12 +139,12 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 		if r.OAuthClientID == "" {
 			return nil, fmt.Errorf("oauth_client_id is required when oauth_base_url is set")
 		}
-		if strings.ToLower(r.UseClientOAuth) != "true" {
+		if strings.ToLower(strings.TrimSpace(r.UseClientOAuth)) != "true" {
 			return nil, fmt.Errorf("oauth_base_url requires use_client_oauth: 'true' (the OAuth proxy uses the Authorization header); a custom header or disabled value is not supported")
 		}
 	}
 
-	if strings.ToLower(r.UseClientOAuth) == "false" {
+	if !clientOAuthEnabled(r.UseClientOAuth) {
 		if r.ClientId == "" || r.ClientSecret == "" {
 			return nil, fmt.Errorf("client_id and client_secret need to be specified")
 		}
@@ -155,8 +155,8 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 		}
 		logger.DebugContext(ctx, fmt.Sprintf("logged in as %s %s", *resp.FirstName, *resp.LastName))
 	} else {
-		if strings.ToLower(r.UseClientOAuth) != "true" {
-			s.AuthTokenHeaderName = r.UseClientOAuth
+		if v := strings.TrimSpace(r.UseClientOAuth); strings.ToLower(v) != "true" {
+			s.AuthTokenHeaderName = v
 		}
 		logger.DebugContext(ctx, fmt.Sprintf("Using AuthTokenHeaderName: %s", s.AuthTokenHeaderName))
 	}
@@ -278,7 +278,15 @@ func hashToken(authHeader string) string {
 }
 
 func (s *Source) UseClientAuthorization() bool {
-	return strings.ToLower(s.UseClientOAuth) != "false"
+	return clientOAuthEnabled(s.UseClientOAuth)
+}
+
+// clientOAuthEnabled reports whether use_client_oauth enables client OAuth.
+// An empty/whitespace value or "false" disables it (uses the configured
+// service-account credentials); any other value enables it.
+func clientOAuthEnabled(useClientOAuth string) bool {
+	v := strings.ToLower(strings.TrimSpace(useClientOAuth))
+	return v != "" && v != "false"
 }
 
 func (s *Source) GetAuthTokenHeaderName() string {
