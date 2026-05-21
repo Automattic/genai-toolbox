@@ -479,6 +479,13 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("the OAuth proxy (a source with oauth_base_url) cannot be combined with MCP server-wide auth (an authService with mcpEnabled); configure only one")
 	}
 
+	// The OAuth proxy and a manual PRM file both claim ownership of the
+	// protected-resource metadata endpoint; with the proxy active the manual
+	// file would be silently ignored, so fail fast instead.
+	if oauthCfg != nil && s.mcpPrmFile != "" {
+		return nil, fmt.Errorf("the OAuth proxy (a source with oauth_base_url) cannot be combined with --mcp-prm-file; both serve the protected-resource metadata endpoint, so configure only one")
+	}
+
 	// Manual PRM override
 	var cachedPrmBytes []byte
 	var prmConfig ProtectedResourceMetadata

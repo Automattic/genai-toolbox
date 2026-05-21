@@ -1224,3 +1224,53 @@ func TestOAuthProxyAndMcpAuthConflict(t *testing.T) {
 		t.Errorf("error %q does not mention the OAuth-proxy / MCP-auth conflict", err.Error())
 	}
 }
+
+func TestOAuthProxyAndMcpPrmFileConflict(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	otelShutdown, err := telemetry.SetupOTel(ctx, "0.0.0", "", false, "toolbox")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	defer func() { _ = otelShutdown(ctx) }()
+
+	testLogger, err := log.NewStdLogger(os.Stdout, os.Stderr, "info")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	ctx = util.WithLogger(ctx, testLogger)
+	instrumentation, err := telemetry.CreateTelemetryInstrumentation("0.0.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	ctx = util.WithInstrumentation(ctx, instrumentation)
+
+	cfg := server.ServerConfig{
+		Version:      "0.0.0",
+		Address:      "127.0.0.1",
+		Port:         5010,
+		PublicURL:    "https://my-toolbox.example.com",
+		McpPrmFile:   "/nonexistent/prm.json",
+		AllowedHosts: []string{"*"},
+		SourceConfigs: map[string]sources.SourceConfig{
+			"looker-source": looker.Config{
+				Name:           "looker-source",
+				Type:           "looker",
+				BaseURL:        "https://looker.example.com",
+				Timeout:        "600s",
+				UseClientOAuth: "true",
+				OAuthBaseURL:   "https://looker.example.com",
+				OAuthClientID:  "mcp-looker",
+			},
+		},
+	}
+
+	_, err = server.NewServer(ctx, cfg)
+	if err == nil {
+		t.Fatal("expected NewServer to fail when OAuth proxy and --mcp-prm-file are both configured")
+	}
+	if !strings.Contains(err.Error(), "mcp-prm-file") {
+		t.Errorf("error %q does not mention the --mcp-prm-file conflict", err.Error())
+	}
+}
