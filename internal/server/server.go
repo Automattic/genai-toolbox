@@ -462,27 +462,12 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	r.Use(hostCheck(allowedHostsMap))
 
 	// Host OAuth Protected Resource Metadata endpoint
-	mcpAuthEnabled := false
-	for _, authSvc := range s.ResourceMgr.GetAuthServiceMap() {
-		if genCfg, ok := authSvc.ToConfig().(generic.Config); ok && genCfg.McpEnabled {
-			mcpAuthEnabled = true
-			break
-		}
-	}
+	mcpAuthEnabled := hasMcpEnabledAuthService(s.ResourceMgr.GetAuthServiceMap())
 
-	// The OAuth proxy and MCP server-wide auth are competing auth gates: the
-	// generic authService would validate (and likely reject) tokens issued
-	// through the proxy flow before the proxy's own gate runs. They are not
-	// meant to compose, so fail fast when both are configured.
-	if oauthCfg != nil && mcpAuthEnabled {
-		return nil, fmt.Errorf("the OAuth proxy (a source with oauth_base_url) cannot be combined with MCP server-wide auth (an authService with mcpEnabled); configure only one")
-	}
-
-	// The OAuth proxy and a manual PRM file both claim ownership of the
-	// protected-resource metadata endpoint; with the proxy active the manual
-	// file would be silently ignored, so fail fast instead.
-	if oauthCfg != nil && s.mcpPrmFile != "" {
-		return nil, fmt.Errorf("the OAuth proxy (a source with oauth_base_url) cannot be combined with --mcp-prm-file; both serve the protected-resource metadata endpoint, so configure only one")
+	// The OAuth proxy cannot coexist with a competing auth gate (an mcpEnabled
+	// authService or a manual PRM file); fail fast when both are configured.
+	if err := oauthCompatibilityError(oauthCfg != nil, mcpAuthEnabled, s.mcpPrmFile); err != nil {
+		return nil, err
 	}
 
 	// Manual PRM override
@@ -665,6 +650,49 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) Addr() string {
 	return s.listener.Addr().String()
+}
+
+// CheckOAuthCompatibility re-validates the OAuth-proxy / auth-gate invariant for
+// a (re)loaded set of sources and auth services. The OAuth discovery/proxy
+// routes and the mcpAuthMiddleware are bound at startup but read the live
+// resource set per request, so a reload that introduces a competing auth gate
+// must be rejected rather than silently breaking authentication.
+func (s *Server) CheckOAuthCompatibility(srcs map[string]sources.Source, authServices map[string]auth.AuthService) error {
+	return oauthCompatibilityError(hasOAuthProxySource(srcs), hasMcpEnabledAuthService(authServices), s.mcpPrmFile)
+}
+
+func hasOAuthProxySource(srcs map[string]sources.Source) bool {
+	for _, src := range srcs {
+		if provider, ok := src.(sources.OAuthProvider); ok && provider.OAuthProviderConfig() != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMcpEnabledAuthService(authServices map[string]auth.AuthService) bool {
+	for _, authSvc := range authServices {
+		if genCfg, ok := authSvc.ToConfig().(generic.Config); ok && genCfg.McpEnabled {
+			return true
+		}
+	}
+	return false
+}
+
+func oauthCompatibilityError(oauthProxyActive, mcpAuthEnabled bool, mcpPrmFile string) error {
+	if !oauthProxyActive {
+		return nil
+	}
+	// The generic authService would validate (and likely reject) tokens issued
+	// through the proxy flow before the proxy's own gate runs.
+	if mcpAuthEnabled {
+		return fmt.Errorf("the OAuth proxy (a source with oauth_base_url) cannot be combined with MCP server-wide auth (an authService with mcpEnabled); configure only one")
+	}
+	// Both the proxy and a manual PRM file own the protected-resource metadata endpoint.
+	if mcpPrmFile != "" {
+		return fmt.Errorf("the OAuth proxy (a source with oauth_base_url) cannot be combined with --mcp-prm-file; both serve the protected-resource metadata endpoint, so configure only one")
+	}
+	return nil
 }
 
 // isNonRoutableAddr reports whether addr is a bind address that is unlikely to

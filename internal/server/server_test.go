@@ -1256,3 +1256,64 @@ func TestOAuthProxyConflicts(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckOAuthCompatibility(t *testing.T) {
+	ctx := newOAuthConflictCtx(t)
+
+	proxyCfg := server.ServerConfig{
+		Version:      "0.0.0",
+		Address:      "127.0.0.1",
+		Port:         5011,
+		PublicURL:    "https://my-toolbox.example.com",
+		AllowedHosts: []string{"*"},
+		SourceConfigs: map[string]sources.SourceConfig{
+			"looker-source": looker.Config{
+				Name: "looker-source", Type: "looker", BaseURL: "https://looker.example.com",
+				Timeout: "600s", UseClientOAuth: "true",
+				OAuthBaseURL: "https://looker.example.com", OAuthClientID: "mcp-looker",
+			},
+		},
+	}
+	s, err := server.NewServer(ctx, proxyCfg)
+	if err != nil {
+		t.Fatalf("unable to initialize proxy server: %v", err)
+	}
+
+	proxySources := map[string]sources.Source{
+		"looker-source": &looker.Source{Config: looker.Config{
+			BaseURL: "https://looker.example.com", UseClientOAuth: "true",
+			OAuthBaseURL: "https://looker.example.com", OAuthClientID: "mcp-looker",
+		}},
+	}
+
+	// Reloading with only the proxy source is fine.
+	if err := s.CheckOAuthCompatibility(proxySources, nil); err != nil {
+		t.Errorf("unexpected error for proxy-only reload: %v", err)
+	}
+
+	// Reloading in an mcpEnabled authService must be rejected.
+	mockOIDC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"issuer": "http://%s", "jwks_uri": "http://%s/jwks"}`, r.Host, r.Host)
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"keys": []}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer mockOIDC.Close()
+	authSvc, err := generic.Config{
+		Name: "generic1", Type: generic.AuthServiceType, McpEnabled: true, AuthorizationServer: mockOIDC.URL,
+	}.Initialize()
+	if err != nil {
+		t.Fatalf("unable to initialize auth service: %v", err)
+	}
+	if err := s.CheckOAuthCompatibility(proxySources, map[string]auth.AuthService{"generic1": authSvc}); err == nil {
+		t.Fatal("expected CheckOAuthCompatibility to reject an mcpEnabled authService alongside the OAuth proxy")
+	} else if !strings.Contains(err.Error(), "cannot be combined") {
+		t.Errorf("error %q does not mention the conflict", err.Error())
+	}
+}

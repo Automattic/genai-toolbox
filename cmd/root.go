@@ -145,6 +145,15 @@ func handleDynamicReload(ctx context.Context, toolsFile internal.Config, s *serv
 		return err
 	}
 
+	// The mcpAuthMiddleware reads the live resource set per request, so a reload
+	// that introduces a competing auth gate would break the OAuth proxy. Reject
+	// it before swapping resources, matching the startup invariant.
+	if err := s.CheckOAuthCompatibility(sourcesMap, authServicesMap); err != nil {
+		errMsg := fmt.Errorf("rejecting reload: %w", err)
+		logger.WarnContext(ctx, errMsg.Error())
+		return errMsg
+	}
+
 	s.ResourceMgr.SetResources(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, toolsetsMap, promptsMap, promptsetsMap)
 
 	// The OAuth proxy routes/middleware are bound at startup and are not

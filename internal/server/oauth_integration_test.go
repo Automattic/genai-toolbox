@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -270,6 +271,33 @@ func TestOAuthAuthorizeRedirect(t *testing.T) {
 	}
 	if !strings.Contains(location, "client_id=test-client-id") {
 		t.Errorf("client_id should have been injected in %s", location)
+	}
+}
+
+func TestOAuthAuthorizeOverridesScope(t *testing.T) {
+	oauthCfg := testOAuthConfig("http://localhost:5000") // configured Scopes: ["cors_api"]
+	r, shutdown := setUpServerWithOAuth(t, oauthCfg, []testutils.MockTool{tool1})
+	defer shutdown()
+	ts := httptest.NewServer(r)
+	defer ts.Close()
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
+	}
+
+	// Client requests a broader scope than configured; it must be overridden.
+	resp, err := client.Get(ts.URL + "/authorize?response_type=code&redirect_uri=http://localhost/callback&scope=admin+cors_api&code_challenge=abc&code_challenge_method=S256")
+	if err != nil {
+		t.Fatalf("request failed: %s", err)
+	}
+	defer resp.Body.Close()
+
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("bad Location header: %s", err)
+	}
+	if got := loc.Query().Get("scope"); got != "cors_api" {
+		t.Errorf("scope = %q, want the configured %q (client-supplied scope must not widen it)", got, "cors_api")
 	}
 }
 
