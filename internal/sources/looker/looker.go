@@ -64,25 +64,25 @@ func newConfig(ctx context.Context, name string, decoder *yaml.Decoder) (sources
 }
 
 type Config struct {
-	Name               string   `yaml:"name" validate:"required"`
-	Type               string   `yaml:"type" validate:"required"`
-	BaseURL            string   `yaml:"base_url" validate:"required"`
-	ClientId           string   `yaml:"client_id"`
-	ClientSecret       string   `yaml:"client_secret"`
-	SslVerification    bool     `yaml:"verify_ssl"`
-	UseClientOAuth     string   `yaml:"use_client_oauth"`
-	Timeout            string   `yaml:"timeout"`
-	ShowHiddenModels   bool     `yaml:"show_hidden_models"`
-	ShowHiddenExplores bool     `yaml:"show_hidden_explores"`
-	ShowHiddenFields   bool     `yaml:"show_hidden_fields"`
-	Project            string   `yaml:"project"`
-	Location           string   `yaml:"location"`
-	SessionLength      int64    `yaml:"sessionLength"`
-	OAuthBaseURL       string   `yaml:"oauth_base_url"`
-	OAuthClientID      string   `yaml:"oauth_client_id"`
-	OAuthClientSecret  string   `yaml:"oauth_client_secret"`
-	OAuthTokenEndpoint string   `yaml:"oauth_token_endpoint"`
-	OAuthScopes        []string `yaml:"oauth_scopes"`
+	Name               string `yaml:"name" validate:"required"`
+	Type               string `yaml:"type" validate:"required"`
+	BaseURL            string `yaml:"base_url" validate:"required"`
+	ClientId           string `yaml:"client_id"`
+	ClientSecret       string `yaml:"client_secret"`
+	SslVerification    bool   `yaml:"verify_ssl"`
+	UseClientOAuth     string `yaml:"use_client_oauth"`
+	Timeout            string `yaml:"timeout"`
+	ShowHiddenModels   bool   `yaml:"show_hidden_models"`
+	ShowHiddenExplores bool   `yaml:"show_hidden_explores"`
+	ShowHiddenFields   bool   `yaml:"show_hidden_fields"`
+	Project            string `yaml:"project"`
+	Location           string `yaml:"location"`
+	SessionLength      int64  `yaml:"sessionLength"`
+	OAuthBaseURL       string `yaml:"oauth_base_url"`
+	OAuthClientID      string `yaml:"oauth_client_id"`
+	OAuthClientSecret  string `yaml:"oauth_client_secret"`
+	OAuthTokenEndpoint string `yaml:"oauth_token_endpoint"`
+	OAuthScopes        string `yaml:"oauth_scopes"` // comma-separated; defaults to "cors_api"
 }
 
 func (r Config) SourceConfigType() string {
@@ -129,9 +129,17 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 		AuthTokenHeaderName: "Authorization",
 	}
 
-	// Validate OAuth proxy config: if oauth_base_url is set, oauth_client_id is required.
-	if r.OAuthBaseURL != "" && r.OAuthClientID == "" {
-		return nil, fmt.Errorf("oauth_client_id is required when oauth_base_url is set")
+	// Validate OAuth proxy config. When oauth_base_url is set the proxy advertises
+	// the standard Authorization header, so oauth_client_id is required and
+	// use_client_oauth must be "true" (a custom auth header or disabled client
+	// OAuth would make the advertised flow fail at tool invocation).
+	if r.OAuthBaseURL != "" {
+		if r.OAuthClientID == "" {
+			return nil, fmt.Errorf("oauth_client_id is required when oauth_base_url is set")
+		}
+		if strings.ToLower(r.UseClientOAuth) != "true" {
+			return nil, fmt.Errorf("oauth_base_url requires use_client_oauth: 'true' (the OAuth proxy uses the Authorization header); a custom header or disabled value is not supported")
+		}
 	}
 
 	if strings.ToLower(r.UseClientOAuth) == "false" {
@@ -190,7 +198,12 @@ func (s *Source) OAuthProviderConfig() *sources.OAuthConfig {
 	if !s.UseClientAuthorization() || s.OAuthBaseURL == "" {
 		return nil
 	}
-	scopes := s.OAuthScopes
+	var scopes []string
+	for _, sc := range strings.Split(s.OAuthScopes, ",") {
+		if t := strings.TrimSpace(sc); t != "" {
+			scopes = append(scopes, t)
+		}
+	}
 	if len(scopes) == 0 {
 		// "cors_api" is the default Looker scope for CORS-enabled API access,
 		// required by browser-based OAuth flows against Looker instances.

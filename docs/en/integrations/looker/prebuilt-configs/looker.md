@@ -20,6 +20,7 @@ description: "Details of the Looker prebuilt configuration."
     *   `LOOKER_OAUTH_CLIENT_ID`: OAuth client ID pre-registered in Looker. Required when `LOOKER_OAUTH_BASE_URL` is set.
     *   `LOOKER_OAUTH_CLIENT_SECRET`: OAuth client secret (empty for public PKCE clients).
     *   `LOOKER_OAUTH_TOKEN_ENDPOINT`: Override for the upstream token endpoint (defaults to `<base_url>/api/token`).
+    *   `LOOKER_OAUTH_SCOPES`: Comma-separated OAuth scopes (defaults to `cors_api`).
 *   **Permissions:**
     *   A Looker account with permissions to access the desired models,
         explores, and data is required.

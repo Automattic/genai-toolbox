@@ -46,6 +46,7 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/server"
 	"github.com/googleapis/mcp-toolbox/internal/sources"
 	"github.com/googleapis/mcp-toolbox/internal/sources/alloydbpg"
+	"github.com/googleapis/mcp-toolbox/internal/sources/looker"
 	"github.com/googleapis/mcp-toolbox/internal/telemetry"
 	"github.com/googleapis/mcp-toolbox/internal/testutils"
 	"github.com/googleapis/mcp-toolbox/internal/tools"
@@ -1148,5 +1149,78 @@ func TestMCPAuthMiddleware(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOAuthProxyAndMcpAuthConflict(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	otelShutdown, err := telemetry.SetupOTel(ctx, "0.0.0", "", false, "toolbox")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	defer func() { _ = otelShutdown(ctx) }()
+
+	testLogger, err := log.NewStdLogger(os.Stdout, os.Stderr, "info")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	ctx = util.WithLogger(ctx, testLogger)
+	instrumentation, err := telemetry.CreateTelemetryInstrumentation("0.0.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	ctx = util.WithInstrumentation(ctx, instrumentation)
+
+	// Mock OIDC server so the generic authService initializes.
+	mockOIDC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"issuer": "http://%s", "jwks_uri": "http://%s/jwks"}`, r.Host, r.Host)
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"keys": []}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer mockOIDC.Close()
+
+	cfg := server.ServerConfig{
+		Version:      "0.0.0",
+		Address:      "127.0.0.1",
+		Port:         5009,
+		ToolboxUrl:   "https://my-toolbox.example.com",
+		PublicURL:    "https://my-toolbox.example.com",
+		AllowedHosts: []string{"*"},
+		SourceConfigs: map[string]sources.SourceConfig{
+			"looker-source": looker.Config{
+				Name:           "looker-source",
+				Type:           "looker",
+				BaseURL:        "https://looker.example.com",
+				Timeout:        "600s",
+				UseClientOAuth: "true",
+				OAuthBaseURL:   "https://looker.example.com",
+				OAuthClientID:  "mcp-looker",
+			},
+		},
+		AuthServiceConfigs: map[string]auth.AuthServiceConfig{
+			"generic1": generic.Config{
+				Name:                "generic1",
+				Type:                generic.AuthServiceType,
+				McpEnabled:          true,
+				AuthorizationServer: mockOIDC.URL,
+			},
+		},
+	}
+
+	_, err = server.NewServer(ctx, cfg)
+	if err == nil {
+		t.Fatal("expected NewServer to fail when OAuth proxy and MCP auth are both configured")
+	}
+	if !strings.Contains(err.Error(), "cannot be combined") {
+		t.Errorf("error %q does not mention the OAuth-proxy / MCP-auth conflict", err.Error())
 	}
 }

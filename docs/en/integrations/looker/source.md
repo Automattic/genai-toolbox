@@ -138,7 +138,7 @@ instead of hardcoding your secrets into the configuration file.
 | oauth_client_id      |  string  |    false     | OAuth client ID pre-registered in Looker. Required when `oauth_base_url` is set.                                                                    |
 | oauth_client_secret  |  string  |    false     | OAuth client secret. Leave empty for public (PKCE) clients.                                                                                          |
 | oauth_token_endpoint |  string  |    false     | Override for the upstream token endpoint. Defaults to `<base_url>/api/token`.                                                                        |
-| oauth_scopes         | []string |    false     | OAuth scopes requested. Defaults to `["cors_api"]`.                                                                                                  |
+| oauth_scopes         |  string  |    false     | Comma-separated OAuth scopes requested. Defaults to `cors_api`.                                                                                      |
 
 ### OAuth proxy
 

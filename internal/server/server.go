@@ -471,6 +471,14 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		}
 	}
 
+	// The OAuth proxy and MCP server-wide auth are competing auth gates: the
+	// generic authService would validate (and likely reject) tokens issued
+	// through the proxy flow before the proxy's own gate runs. They are not
+	// meant to compose, so fail fast when both are configured.
+	if oauthCfg != nil && mcpAuthEnabled {
+		return nil, fmt.Errorf("the OAuth proxy (a source with oauth_base_url) cannot be combined with MCP server-wide auth (an authService with mcpEnabled); configure only one")
+	}
+
 	// Manual PRM override
 	var cachedPrmBytes []byte
 	var prmConfig ProtectedResourceMetadata
