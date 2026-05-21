@@ -40,6 +40,7 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/log"
 	"github.com/googleapis/mcp-toolbox/internal/prompts"
 	"github.com/googleapis/mcp-toolbox/internal/server/mcp/jsonrpc"
+	"github.com/googleapis/mcp-toolbox/internal/server/oauth"
 	"github.com/googleapis/mcp-toolbox/internal/server/resources"
 	"github.com/googleapis/mcp-toolbox/internal/sources"
 	"github.com/googleapis/mcp-toolbox/internal/telemetry"
@@ -62,6 +63,7 @@ type Server struct {
 	sseManager          *sseManager
 	ResourceMgr         *resources.ResourceManager
 	mcpPrmFile          string
+	oauthConfig         *oauth.Config
 }
 
 func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
@@ -380,6 +382,39 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 
 	resourceManager := resources.NewResourceManager(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, toolsetsMap, promptsMap, promptsetsMap)
 
+	// Scan sources for OAuthProvider implementations (HTTP transport only).
+	var oauthCfg *oauth.Config
+	if !cfg.Stdio {
+		var oauthSourceName string
+		for name, src := range sourcesMap {
+			provider, ok := src.(sources.OAuthProvider)
+			if !ok {
+				continue
+			}
+			provCfg := provider.OAuthProviderConfig()
+			if provCfg == nil {
+				continue
+			}
+			if oauthCfg != nil {
+				return nil, fmt.Errorf("multiple sources implement OAuthProvider (at least %q and %q); only one is supported", oauthSourceName, name)
+			}
+			oauthSourceName = name
+			baseURL := cfg.PublicURL
+			if baseURL == "" {
+				// Warn if the bind address is non-routable (0.0.0.0, 127.0.0.1, etc.)
+				if cfg.Address == "0.0.0.0" || cfg.Address == "" || cfg.Address == "127.0.0.1" || cfg.Address == "localhost" {
+					l.WarnContext(ctx, fmt.Sprintf("OAuth is active but --public-url is not set and bind address is %q. OAuth metadata will default to http://%s based on the bind address. If this URL is not externally reachable (e.g. behind a proxy, load balancer, or ingress), set --public-url to the externally reachable URL that clients use.", cfg.Address, addr))
+				}
+				baseURL = fmt.Sprintf("http://%s", addr)
+			}
+			baseURL = strings.TrimRight(baseURL, "/")
+			oauthCfg = &oauth.Config{
+				BaseURL:  baseURL,
+				Provider: provCfg,
+			}
+		}
+	}
+
 	s := &Server{
 		version:             cfg.Version,
 		sqlCommenterEnabled: cfg.SQLCommenter,
@@ -391,6 +426,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		ResourceMgr:         resourceManager,
 		toolboxUrl:          cfg.ToolboxUrl,
 		mcpPrmFile:          cfg.McpPrmFile,
+		oauthConfig:         oauthCfg,
 	}
 
 	// cors
@@ -402,8 +438,8 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowCredentials: true, // required since Toolbox uses auth headers
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Mcp-Session-Id", "MCP-Protocol-Version"},
-		ExposedHeaders:   []string{"Mcp-Session-Id"}, // headers that are sent to clients
-		MaxAge:           300,                        // cache preflight results for 5 minutes
+		ExposedHeaders:   []string{"Mcp-Session-Id", "WWW-Authenticate"}, // headers that are sent to clients
+		MaxAge:           300,                                            // cache preflight results for 5 minutes
 	}
 	r.Use(cors.Handler(corsOpts))
 	// validate hosts for DNS rebinding attacks
@@ -444,8 +480,11 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		}
 	}
 
-	// Register route if auth is enabled or a manual file is provided
-	if mcpAuthEnabled || s.mcpPrmFile != "" {
+	// Register route if auth is enabled or a manual file is provided.
+	// When the OAuth proxy is active it owns this endpoint (advertising the
+	// toolbox itself as the authorization server), so skip the native handler
+	// to avoid registering the route twice.
+	if (mcpAuthEnabled || s.mcpPrmFile != "") && oauthCfg == nil {
 		r.Get("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, req *http.Request) {
 			// Serve from memory if file was loaded
 			if s.mcpPrmFile != "" {
@@ -459,6 +498,12 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 
 			prmHandler(s, w, req)
 		})
+	}
+
+	// OAuth discovery and proxy endpoints (mounted before /mcp)
+	if oauthCfg != nil {
+		oauth.MountRoutes(r, oauthCfg)
+		l.InfoContext(ctx, fmt.Sprintf("OAuth proxy enabled (authorize: %s, client_id: %s)", oauthCfg.Provider.AuthorizeEndpoint, oauthCfg.Provider.ClientID))
 	}
 
 	// control plane
