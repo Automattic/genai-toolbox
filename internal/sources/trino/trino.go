@@ -371,7 +371,7 @@ func executeQuery(ctx context.Context, db *sql.DB, statement string, params []an
 		values[i] = &rawValues[i]
 	}
 
-	var out []any
+	out := []any{}
 	for results.Next() {
 		err := results.Scan(values...)
 		if err != nil {
