@@ -400,6 +400,111 @@ func TestTrinoDriverSendsImpersonationHeader(t *testing.T) {
 	}
 }
 
+func TestResolveExtraCredential(t *testing.T) {
+	tests := []struct {
+		name        string
+		headerValue string
+		want        string
+	}{
+		{name: "header value", headerValue: "ai-tool=ai-opers", want: "ai-tool=ai-opers"},
+		{name: "trims whitespace", headerValue: "  ai-tool=ai-opers  ", want: "ai-tool=ai-opers"},
+		{name: "no header returns empty", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := util.WithExtraCredential(context.Background(), tt.headerValue)
+			if got := resolveExtraCredential(ctx); got != tt.want {
+				t.Errorf("resolveExtraCredential() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAppendExtraCredential(t *testing.T) {
+	t.Run("empty credential leaves params unchanged", func(t *testing.T) {
+		params := []any{42}
+		got := appendExtraCredential(params, "")
+		if len(got) != 1 || got[0] != 42 {
+			t.Errorf("appendExtraCredential() = %v, want [42]", got)
+		}
+	})
+
+	t.Run("non-empty credential appends named arg", func(t *testing.T) {
+		params := []any{42}
+		got := appendExtraCredential(params, "ai-tool=ai-opers")
+
+		last := got[len(got)-1]
+		named, ok := last.(sql.NamedArg)
+		if !ok {
+			t.Fatalf("last param is %T, want sql.NamedArg", last)
+		}
+		if named.Name != trinoExtraCredentialHeader {
+			t.Errorf("named arg name = %q, want %q", named.Name, trinoExtraCredentialHeader)
+		}
+		if named.Value != "ai-tool=ai-opers" {
+			t.Errorf("named arg value = %q, want %q", named.Value, "ai-tool=ai-opers")
+		}
+		if got[0] != 42 {
+			t.Errorf("params[0] = %v, want 42", got[0])
+		}
+		// Result must be a fresh slice (no aliasing).
+		if &got[0] == &params[0] {
+			t.Error("returned slice aliases input params backing array")
+		}
+	})
+}
+
+// TestTrinoDriverSendsExtraCredentialHeader verifies that the trino-go-client
+// actually sends X-Trino-Extra-Credential as an HTTP header when
+// sql.Named("X-Trino-Extra-Credential", ...) is passed as a query arg. This is
+// a regression guard for client library upgrades.
+func TestTrinoDriverSendsExtraCredentialHeader(t *testing.T) {
+	var mu sync.Mutex
+	var capturedCred string
+
+	// Minimal fake Trino server that captures X-Trino-Extra-Credential and returns an empty result set.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if v := r.Header.Get("X-Trino-Extra-Credential"); v != "" {
+			capturedCred = v
+		}
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":      "test_query_1",
+			"infoUri": "http://localhost/query/test_query_1",
+			"stats": map[string]any{
+				"state":              "FINISHED",
+				"progressPercentage": 100.0,
+			},
+			"columns": []map[string]any{
+				{"name": "dummy", "type": "integer"},
+			},
+		})
+	}))
+	t.Cleanup(ts.Close)
+
+	db, err := sql.Open("trino", ts.URL+"?catalog=test&schema=default")
+	if err != nil {
+		t.Fatalf("failed to open trino connection: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	rows, err := db.Query("SELECT 1", sql.Named("X-Trino-Extra-Credential", "ai-tool=ai-opers"))
+	if err != nil {
+		t.Fatalf("query failed: %v", err)
+	}
+	rows.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if capturedCred != "ai-tool=ai-opers" {
+		t.Errorf("X-Trino-Extra-Credential header = %q, want %q", capturedCred, "ai-tool=ai-opers")
+	}
+}
+
 func TestParseFromYamlTrino(t *testing.T) {
 	tcs := []struct {
 		desc string

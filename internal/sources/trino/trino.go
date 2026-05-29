@@ -120,6 +120,11 @@ const trinoUserHeader = "X-Trino-User"
 // client tags. Used with sql.Named to override per query.
 const trinoClientTagsHeader = "X-Trino-Client-Tags"
 
+// trinoExtraCredentialHeader is the HTTP header the trino-go-client uses to
+// set extra credentials. Used with sql.Named to set per query. The value is
+// the Trino wire format "name=value" (comma-separated for multiple).
+const trinoExtraCredentialHeader = "X-Trino-Extra-Credential"
+
 // validUsernameRe matches allowed usernames for impersonation.
 // Constraining the pattern prevents malformed or injected identities from
 // reaching Trino, failing fast in MCP instead.
@@ -196,6 +201,24 @@ func appendClientTags(params []any, tags string) []any {
 	return appendNamedParam(params, trinoClientTagsHeader, tags)
 }
 
+// resolveExtraCredential returns the per-request Trino extra credential from
+// the X-Trino-Extra-Credential header (carried on the context), trimmed of
+// surrounding whitespace. Returns empty string when none is present.
+func resolveExtraCredential(ctx context.Context) string {
+	return strings.TrimSpace(util.ExtraCredentialFromContext(ctx))
+}
+
+// appendExtraCredential appends sql.Named("X-Trino-Extra-Credential", cred) to
+// params if a credential is present. Returns params unchanged when cred is
+// empty. The trino-go-client forwards any sql.Named param whose name has the
+// "X-Trino-" prefix as a per-query request header.
+func appendExtraCredential(params []any, cred string) []any {
+	if cred == "" {
+		return params
+	}
+	return appendNamedParam(params, trinoExtraCredentialHeader, cred)
+}
+
 // RunSQLAsUser executes a SQL statement as a specific user identity.
 // The shared pool authenticates with service account credentials while
 // the trino-go-client's sql.Named("X-Trino-User", user) overrides the
@@ -209,6 +232,7 @@ func (s *Source) RunSQLAsUser(ctx context.Context, statement string, params []an
 		return nil, err
 	}
 	params = appendClientTags(params, s.resolveClientTags(ctx))
+	params = appendExtraCredential(params, resolveExtraCredential(ctx))
 	return executeQuery(ctx, s.Pool, statement, params)
 }
 
@@ -348,6 +372,7 @@ func (s *Source) RunSQL(ctx context.Context, statement string, params []any) (an
 		return nil, err
 	}
 	params = appendClientTags(params, s.resolveClientTags(ctx))
+	params = appendExtraCredential(params, resolveExtraCredential(ctx))
 	return executeQuery(ctx, s.Pool, statement, params)
 }
 
