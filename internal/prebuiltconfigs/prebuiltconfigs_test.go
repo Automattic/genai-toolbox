@@ -60,6 +60,7 @@ var expectedToolSources = []string{
 	"spanner-postgres",
 	"spanner",
 	"sqlite",
+	"trino",
 }
 
 func TestGetPrebuiltSources(t *testing.T) {
