@@ -112,3 +112,27 @@ Trino as `X-Trino-Client-Tags` per query. This lets different MCP clients (e.g.
 Claude Code, Cursor) identify themselves in Trino query logs and resource group
 rules. The header value is untrusted input appended to the tag list — it extends
 the static tags, it cannot override them.
+
+### Extra credential forwarding
+
+Toolbox reads the `X-Trino-Extra-Credential` header from each incoming MCP/REST
+request and forwards its value to Trino as `X-Trino-Extra-Credential` per query
+(via `sql.Named`, the same mechanism the trino-go-client uses for per-query
+headers). The value is passed through verbatim in the Trino wire format
+(`name=value`, comma-separated for multiple credentials). When the header is
+absent, no extra credential is attached.
+
+Extra credentials are consumed by Trino plugins — for example an access-control
+plugin (such as OPA via `opa.identity.extra-credentials-keys`) can branch its
+authorization decision on a credential like `ai-tool=ai-opers`, letting a client
+opt into a restricted, read-only access profile.
+
+{{< notice warning >}}
+The forwarded value is **client-asserted**, not authenticated. A client chooses
+which extra credentials to send (or to send none), so per-request forwarding is
+appropriate for clients that voluntarily scope themselves down. It is **not** a
+security boundary you can use to confine an untrusted client — a client can omit
+the header to avoid the restriction. To force every connection into a given
+profile regardless of the client, set the credential statically on the source
+(server side) instead.
+{{< /notice >}}

@@ -333,6 +333,7 @@ func toolsCallHandler(ctx context.Context, id jsonrpc.RequestId, toolset tools.T
 	// run tool invocation and generate response.
 	if header != nil {
 		ctx = util.WithClientTags(ctx, header.Get("X-Trino-Client-Tags"))
+		ctx = util.WithExtraCredential(ctx, header.Get("X-Trino-Extra-Credential"))
 	}
 	executionStart := time.Now()
 	results, err := tool.Invoke(ctx, resourceMgr, params, accessToken)

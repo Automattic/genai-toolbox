@@ -140,6 +140,26 @@ func ClientTagsFromContext(ctx context.Context) string {
 	return ""
 }
 
+// extraCredentialKey is the key used to store per-request Trino extra
+// credentials within context.
+const extraCredentialKey contextKey = "extraCredential"
+
+// WithExtraCredential stores a Trino extra-credential string (e.g. the
+// X-Trino-Extra-Credential request header) in the context for downstream
+// sources to read.
+func WithExtraCredential(ctx context.Context, cred string) context.Context {
+	return context.WithValue(ctx, extraCredentialKey, cred)
+}
+
+// ExtraCredentialFromContext retrieves the extra-credential string from the
+// context, returning an empty string when none is present.
+func ExtraCredentialFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(extraCredentialKey).(string); ok {
+		return v
+	}
+	return ""
+}
+
 type UserAgentRoundTripper struct {
 	userAgent string
 	next      http.RoundTripper

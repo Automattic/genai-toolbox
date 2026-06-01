@@ -254,6 +254,8 @@ func toolInvokeHandler(s *Server, w http.ResponseWriter, r *http.Request) {
 
 	// Forward per-request client tags (e.g. X-Trino-Client-Tags) to the source.
 	ctx = util.WithClientTags(ctx, r.Header.Get("X-Trino-Client-Tags"))
+	// Forward per-request Trino extra credentials (e.g. X-Trino-Extra-Credential) to the source.
+	ctx = util.WithExtraCredential(ctx, r.Header.Get("X-Trino-Extra-Credential"))
 	res, err := tool.Invoke(ctx, s.ResourceMgr, params, accessToken)
 
 	// Determine what error to return to the users.
