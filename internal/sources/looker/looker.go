@@ -15,10 +15,13 @@ package looker
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	geminidataanalytics "cloud.google.com/go/geminidataanalytics/apiv1beta"
@@ -77,6 +80,11 @@ type Config struct {
 	Project            string `yaml:"project"`
 	Location           string `yaml:"location"`
 	SessionLength      int64  `yaml:"sessionLength"`
+	OAuthBaseURL       string `yaml:"oauth_base_url"`
+	OAuthClientID      string `yaml:"oauth_client_id"`
+	OAuthClientSecret  string `yaml:"oauth_client_secret"`
+	OAuthTokenEndpoint string `yaml:"oauth_token_endpoint"`
+	OAuthScopes        string `yaml:"oauth_scopes"` // comma-separated; defaults to "cors_api"
 }
 
 func (r Config) SourceConfigType() string {
@@ -123,7 +131,20 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 		AuthTokenHeaderName: "Authorization",
 	}
 
-	if strings.ToLower(r.UseClientOAuth) == "false" {
+	// Validate OAuth proxy config. When oauth_base_url is set the proxy advertises
+	// the standard Authorization header, so oauth_client_id is required and
+	// use_client_oauth must be "true" (a custom auth header or disabled client
+	// OAuth would make the advertised flow fail at tool invocation).
+	if r.OAuthBaseURL != "" {
+		if r.OAuthClientID == "" {
+			return nil, fmt.Errorf("oauth_client_id is required when oauth_base_url is set")
+		}
+		if strings.ToLower(strings.TrimSpace(r.UseClientOAuth)) != "true" {
+			return nil, fmt.Errorf("oauth_base_url requires use_client_oauth: 'true' (the OAuth proxy uses the Authorization header); a custom header or disabled value is not supported")
+		}
+	}
+
+	if !clientOAuthEnabled(r.UseClientOAuth) {
 		if r.ClientId == "" || r.ClientSecret == "" {
 			return nil, fmt.Errorf("client_id and client_secret need to be specified")
 		}
@@ -134,8 +155,8 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 		}
 		logger.DebugContext(ctx, fmt.Sprintf("logged in as %s %s", *resp.FirstName, *resp.LastName))
 	} else {
-		if strings.ToLower(r.UseClientOAuth) != "true" {
-			s.AuthTokenHeaderName = r.UseClientOAuth
+		if v := strings.TrimSpace(r.UseClientOAuth); strings.ToLower(v) != "true" {
+			s.AuthTokenHeaderName = v
 		}
 		logger.DebugContext(ctx, fmt.Sprintf("Using AuthTokenHeaderName: %s", s.AuthTokenHeaderName))
 	}
@@ -145,6 +166,7 @@ func (r Config) Initialize(ctx context.Context, tracer trace.Tracer) (sources.So
 }
 
 var _ sources.Source = &Source{}
+var _ sources.OAuthProvider = &Source{}
 
 type Source struct {
 	Config
@@ -152,7 +174,17 @@ type Source struct {
 	ApiSettings         *rtl.ApiSettings
 	TokenSource         oauth2.TokenSource
 	AuthTokenHeaderName string
+
+	tokenCacheMu sync.Mutex
+	tokenCache   map[string]time.Time // sha256(auth header) -> validation expiry
 }
+
+// oauthTokenCacheTTL bounds how long a validated OAuth token is trusted before
+// it is re-checked against Looker. oauthTokenCacheMax caps the cache size.
+const (
+	oauthTokenCacheTTL = 5 * time.Minute
+	oauthTokenCacheMax = 1024
+)
 
 func (s *Source) SourceType() string {
 	return SourceType
@@ -162,8 +194,99 @@ func (s *Source) ToConfig() sources.SourceConfig {
 	return s.Config
 }
 
+// OAuthProviderConfig returns the OAuth proxy configuration if the source is configured
+// for client OAuth with an OAuth base URL. Returns nil if not applicable.
+func (s *Source) OAuthProviderConfig() *sources.OAuthConfig {
+	if !s.UseClientAuthorization() || s.OAuthBaseURL == "" {
+		return nil
+	}
+	var scopes []string
+	for _, sc := range strings.Split(s.OAuthScopes, ",") {
+		if t := strings.TrimSpace(sc); t != "" {
+			scopes = append(scopes, t)
+		}
+	}
+	if len(scopes) == 0 {
+		// "cors_api" is the default Looker scope for CORS-enabled API access,
+		// required by browser-based OAuth flows against Looker instances.
+		scopes = []string{"cors_api"}
+	}
+	oauthBase := strings.TrimRight(s.OAuthBaseURL, "/")
+	tokenEndpoint := s.OAuthTokenEndpoint
+	if tokenEndpoint == "" {
+		tokenEndpoint = strings.TrimRight(s.BaseURL, "/") + "/api/token"
+	}
+	return &sources.OAuthConfig{
+		AuthorizeEndpoint: oauthBase + "/auth",
+		TokenEndpoint:     tokenEndpoint,
+		ClientID:          s.OAuthClientID,
+		ClientSecret:      s.OAuthClientSecret,
+		Scopes:            scopes,
+		VerifySSL:         s.SslVerification,
+	}
+}
+
+// ValidateOAuthToken verifies the access token by calling the Looker API as the
+// token's user. authHeader is the full "Bearer <token>" Authorization header
+// value, matching what GetLookerSDK forwards upstream. Results are cached for a
+// short TTL to bound upstream calls. Implements sources.OAuthTokenValidator.
+func (s *Source) ValidateOAuthToken(ctx context.Context, authHeader string) error {
+	if authHeader == "" {
+		return fmt.Errorf("empty access token")
+	}
+	now := time.Now()
+	// Key the cache by a hash so raw bearer tokens aren't held in memory.
+	key := hashToken(authHeader)
+
+	s.tokenCacheMu.Lock()
+	if exp, ok := s.tokenCache[key]; ok && now.Before(exp) {
+		s.tokenCacheMu.Unlock()
+		return nil
+	}
+	s.tokenCacheMu.Unlock()
+
+	sdk, err := s.GetLookerSDK(ctx, authHeader)
+	if err != nil {
+		return fmt.Errorf("unable to build Looker session for token validation: %w", err)
+	}
+	if _, err := sdk.Me("", s.LookerApiSettings()); err != nil {
+		return fmt.Errorf("token rejected by Looker: %w", err)
+	}
+
+	s.tokenCacheMu.Lock()
+	defer s.tokenCacheMu.Unlock()
+	if s.tokenCache == nil {
+		s.tokenCache = make(map[string]time.Time)
+	}
+	for t, e := range s.tokenCache {
+		if !now.Before(e) {
+			delete(s.tokenCache, t)
+		}
+	}
+	if len(s.tokenCache) >= oauthTokenCacheMax {
+		// Still at capacity after evicting expired entries: reset rather than
+		// track LRU. Cheap and rare.
+		s.tokenCache = make(map[string]time.Time)
+	}
+	s.tokenCache[key] = now.Add(oauthTokenCacheTTL)
+	return nil
+}
+
+func hashToken(authHeader string) string {
+	sum := sha256.Sum256([]byte(authHeader))
+	return hex.EncodeToString(sum[:])
+}
+
 func (s *Source) UseClientAuthorization() bool {
-	return strings.ToLower(s.UseClientOAuth) != "false"
+	return clientOAuthEnabled(s.UseClientOAuth)
+}
+
+// clientOAuthEnabled reports whether use_client_oauth enables client OAuth.
+// An empty/whitespace value or "false" disables it (uses the configured
+// service-account credentials); any other value enables it.
+func clientOAuthEnabled(useClientOAuth string) bool {
+	v := strings.ToLower(strings.TrimSpace(useClientOAuth))
+	return v != "" && v != "false"
 }
 
 func (s *Source) GetAuthTokenHeaderName() string {

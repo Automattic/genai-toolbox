@@ -46,6 +46,7 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/server"
 	"github.com/googleapis/mcp-toolbox/internal/sources"
 	"github.com/googleapis/mcp-toolbox/internal/sources/alloydbpg"
+	"github.com/googleapis/mcp-toolbox/internal/sources/looker"
 	"github.com/googleapis/mcp-toolbox/internal/telemetry"
 	"github.com/googleapis/mcp-toolbox/internal/testutils"
 	"github.com/googleapis/mcp-toolbox/internal/tools"
@@ -1148,5 +1149,171 @@ func TestMCPAuthMiddleware(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// newOAuthConflictCtx builds a context with logger + instrumentation for the
+// NewServer conflict tests.
+func newOAuthConflictCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	otelShutdown, err := telemetry.SetupOTel(ctx, "0.0.0", "", false, "toolbox")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	t.Cleanup(func() { _ = otelShutdown(ctx) })
+
+	testLogger, err := log.NewStdLogger(os.Stdout, os.Stderr, "info")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	ctx = util.WithLogger(ctx, testLogger)
+	instrumentation, err := telemetry.CreateTelemetryInstrumentation("0.0.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+	return util.WithInstrumentation(ctx, instrumentation)
+}
+
+func TestOAuthProxyConflicts(t *testing.T) {
+	lookerProxySource := map[string]sources.SourceConfig{
+		"looker-source": looker.Config{
+			Name:           "looker-source",
+			Type:           "looker",
+			BaseURL:        "https://looker.example.com",
+			Timeout:        "600s",
+			UseClientOAuth: "true",
+			OAuthBaseURL:   "https://looker.example.com",
+			OAuthClientID:  "mcp-looker",
+		},
+	}
+
+	tests := []struct {
+		name      string
+		port      int
+		errSubstr string
+		mutate    func(t *testing.T, cfg *server.ServerConfig)
+	}{
+		{
+			name:      "with MCP server-wide auth",
+			port:      5009,
+			errSubstr: "cannot be combined",
+			mutate: func(t *testing.T, cfg *server.ServerConfig) {
+				// Mock OIDC server so the generic authService initializes.
+				mockOIDC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/.well-known/openid-configuration":
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprintf(w, `{"issuer": "http://%s", "jwks_uri": "http://%s/jwks"}`, r.Host, r.Host)
+					case "/jwks":
+						w.Header().Set("Content-Type", "application/json")
+						fmt.Fprint(w, `{"keys": []}`)
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				}))
+				t.Cleanup(mockOIDC.Close)
+				cfg.AuthServiceConfigs = map[string]auth.AuthServiceConfig{
+					"generic1": generic.Config{
+						Name:                "generic1",
+						Type:                generic.AuthServiceType,
+						McpEnabled:          true,
+						AuthorizationServer: mockOIDC.URL,
+					},
+				}
+			},
+		},
+		{
+			name:      "with --mcp-prm-file",
+			port:      5010,
+			errSubstr: "mcp-prm-file",
+			mutate: func(t *testing.T, cfg *server.ServerConfig) {
+				cfg.McpPrmFile = "/nonexistent/prm.json"
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := newOAuthConflictCtx(t)
+			cfg := server.ServerConfig{
+				Version:       "0.0.0",
+				Address:       "127.0.0.1",
+				Port:          tc.port,
+				PublicURL:     "https://my-toolbox.example.com",
+				AllowedHosts:  []string{"*"},
+				SourceConfigs: lookerProxySource,
+			}
+			tc.mutate(t, &cfg)
+
+			if _, err := server.NewServer(ctx, cfg); err == nil {
+				t.Fatal("expected NewServer to fail when the OAuth proxy is combined with a competing auth gate")
+			} else if !strings.Contains(err.Error(), tc.errSubstr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.errSubstr)
+			}
+		})
+	}
+}
+
+func TestCheckOAuthCompatibility(t *testing.T) {
+	ctx := newOAuthConflictCtx(t)
+
+	proxyCfg := server.ServerConfig{
+		Version:      "0.0.0",
+		Address:      "127.0.0.1",
+		Port:         5011,
+		PublicURL:    "https://my-toolbox.example.com",
+		AllowedHosts: []string{"*"},
+		SourceConfigs: map[string]sources.SourceConfig{
+			"looker-source": looker.Config{
+				Name: "looker-source", Type: "looker", BaseURL: "https://looker.example.com",
+				Timeout: "600s", UseClientOAuth: "true",
+				OAuthBaseURL: "https://looker.example.com", OAuthClientID: "mcp-looker",
+			},
+		},
+	}
+	s, err := server.NewServer(ctx, proxyCfg)
+	if err != nil {
+		t.Fatalf("unable to initialize proxy server: %v", err)
+	}
+
+	proxySources := map[string]sources.Source{
+		"looker-source": &looker.Source{Config: looker.Config{
+			BaseURL: "https://looker.example.com", UseClientOAuth: "true",
+			OAuthBaseURL: "https://looker.example.com", OAuthClientID: "mcp-looker",
+		}},
+	}
+
+	// Reloading with only the proxy source is fine.
+	if err := s.CheckOAuthCompatibility(proxySources, nil); err != nil {
+		t.Errorf("unexpected error for proxy-only reload: %v", err)
+	}
+
+	// Reloading in an mcpEnabled authService must be rejected.
+	mockOIDC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"issuer": "http://%s", "jwks_uri": "http://%s/jwks"}`, r.Host, r.Host)
+		case "/jwks":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"keys": []}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer mockOIDC.Close()
+	authSvc, err := generic.Config{
+		Name: "generic1", Type: generic.AuthServiceType, McpEnabled: true, AuthorizationServer: mockOIDC.URL,
+	}.Initialize()
+	if err != nil {
+		t.Fatalf("unable to initialize auth service: %v", err)
+	}
+	if err := s.CheckOAuthCompatibility(proxySources, map[string]auth.AuthService{"generic1": authSvc}); err == nil {
+		t.Fatal("expected CheckOAuthCompatibility to reject an mcpEnabled authService alongside the OAuth proxy")
+	} else if !strings.Contains(err.Error(), "cannot be combined") {
+		t.Errorf("error %q does not mention the conflict", err.Error())
 	}
 }

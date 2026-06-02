@@ -130,7 +130,36 @@ instead of hardcoding your secrets into the configuration file.
 | project              |  string  |    false     | The project id to use in Google Cloud.                                                                                                              |
 | location             |  string  |    false     | The location to use in Google Cloud. (default: us)                                                                                                  |
 | timeout              |  string  |    false     | Maximum time to wait for query execution (e.g. "30s", "2m"). By default, 120s is applied.                                                           |
-| use_client_oauth     |  string  |    false     | If set to `'true'`, forwards the client's OAuth access token from the default `Authorization` header. If set to a custom header name (e.g., `X-Looker-Auth`), that header will be used instead. An empty string or `'false'` disables this feature. Defaults to `""` (disabled). |
+| use_client_oauth     |  string  |    false     | If set to `'true'`, forwards the client's OAuth access token from the default `Authorization` header. If set to a custom header name (e.g., `X-Looker-Auth`), that header will be used instead — but custom header values are only for non-proxy client OAuth; the OAuth proxy (`oauth_base_url`) requires `'true'`. An empty string or `'false'` disables this feature. Defaults to `""` (disabled). |
 | show_hidden_models   |  string  |    false     | Show or hide hidden models. (default: true)                                                                                                         |
 | show_hidden_explores |  string  |    false     | Show or hide hidden explores. (default: true)                                                                                                       |
 | show_hidden_fields   |  string  |    false     | Show or hide hidden fields. (default: true)                                                                                                         |
+| oauth_base_url       |  string  |    false     | Public Looker URL used for OAuth redirects (e.g. `https://looker.example.com`). Enables the OAuth proxy when set; requires `oauth_client_id` and `use_client_oauth: 'true'`. See [OAuth proxy](#oauth-proxy). |
+| oauth_client_id      |  string  |    false     | OAuth client ID pre-registered in Looker. Required when `oauth_base_url` is set.                                                                    |
+| oauth_client_secret  |  string  |    false     | OAuth client secret. Leave empty for public (PKCE) clients.                                                                                          |
+| oauth_token_endpoint |  string  |    false     | Override for the upstream token endpoint. Defaults to `<base_url>/api/token`.                                                                        |
+| oauth_scopes         |  string  |    false     | Comma-separated OAuth scopes requested. Defaults to `cors_api`. The proxy enforces these on `/authorize` (a client-supplied `scope` cannot widen them). |
+
+### OAuth proxy
+
+When `oauth_base_url`/`oauth_client_id` are set (with `use_client_oauth: 'true'`), Toolbox
+exposes OAuth discovery and proxy endpoints (RFC 8414, RFC 9728) and advertises itself as the
+authorization server: `/.well-known/oauth-protected-resource`,
+`/.well-known/oauth-authorization-server`, `/authorize`, `/token`, and `/register`. This lets MCP
+clients that rely on automatic OAuth discovery and Dynamic Client Registration (e.g. Claude Code,
+Cursor) authenticate against Looker, which does not itself publish authorization-server metadata or
+support RFC 7591. Toolbox proxies `/authorize` and `/token` to Looker with the configured
+`oauth_client_id` (and `oauth_client_secret`) injected server-side, then forwards the resulting
+access token to the Looker API per request.
+
+Set [`--public-url`](../../reference/cli.md) to the externally reachable URL clients use, since it
+is advertised in the OAuth metadata. The OAuth proxy is HTTP-only (not available over stdio). It
+requires `use_client_oauth: 'true'` (custom header values are only for non-proxy client OAuth), and
+cannot be combined with `--mcp-prm-file` or MCP server-wide auth (an `authService` with
+`mcpEnabled`) — Toolbox fails to start if either is also configured, since they would both own the
+protected-resource metadata endpoint or impose a competing auth gate.
+
+Incoming bearer tokens are validated against Looker (the `me` API call) before any MCP method runs,
+with a short-lived cache to bound upstream calls. The OAuth routes and middleware are bound at
+startup; changing the OAuth configuration requires a restart (a dynamic config reload logs a warning
+and does not re-mount them).

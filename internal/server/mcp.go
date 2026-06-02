@@ -39,6 +39,7 @@ import (
 	mcputil "github.com/googleapis/mcp-toolbox/internal/server/mcp/util"
 	v20241105 "github.com/googleapis/mcp-toolbox/internal/server/mcp/v20241105"
 	v20250326 "github.com/googleapis/mcp-toolbox/internal/server/mcp/v20250326"
+	"github.com/googleapis/mcp-toolbox/internal/server/oauth"
 	"github.com/googleapis/mcp-toolbox/internal/tools"
 	"github.com/googleapis/mcp-toolbox/internal/util"
 	"go.opentelemetry.io/otel"
@@ -360,6 +361,11 @@ func mcpRouter(s *Server) (chi.Router, error) {
 		})
 	})
 	r.Use(mcpAuthMiddleware(s))
+
+	// Inject WWW-Authenticate header on 401 responses when the OAuth proxy is configured.
+	if s.oauthConfig != nil {
+		r.Use(oauth.WWWAuthenticateMiddleware(s.oauthConfig.BaseURL))
+	}
 
 	r.Get("/sse", func(w http.ResponseWriter, r *http.Request) { sseHandler(s, w, r) })
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) { methodNotAllowed(s, w, r) })
@@ -779,6 +785,32 @@ func processMcpMessage(ctx context.Context, body []byte, s *Server, protocolVers
 
 	// Add instrumentation to context for use in method handlers
 	ctx = util.WithInstrumentation(ctx, s.instrumentation)
+
+	// When the OAuth proxy is configured, require authentication for all methods
+	// (including initialize, so the very first POST triggers the client's OAuth
+	// discovery flow). Ping is exempted as a lightweight health-check. header is
+	// nil for STDIO transport, where OAuth does not apply.
+	if s.oauthConfig != nil && header != nil && baseMessage.Method != "ping" {
+		authHeader := strings.TrimSpace(header.Get("Authorization"))
+		if tok, perr := tools.AccessToken(authHeader).ParseBearerToken(); perr != nil || tok == "" {
+			err := util.NewClientServerError("authentication required", http.StatusUnauthorized, nil)
+			rpcErr := jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, err.Error(), nil)
+			span.SetStatus(codes.Error, err.Error())
+			return "", rpcErr, err
+		}
+		// Validate the token against the upstream provider when supported. The
+		// full "Bearer <token>" header value is passed through, since that is
+		// what sources forward to the upstream API (see GetLookerSDK).
+		if s.oauthConfig.Validate != nil {
+			if err := s.oauthConfig.Validate(ctx, authHeader); err != nil {
+				logger.DebugContext(ctx, fmt.Sprintf("OAuth token validation failed: %v", err))
+				cse := util.NewClientServerError("invalid access token", http.StatusUnauthorized, nil)
+				rpcErr := jsonrpc.NewError(baseMessage.Id, jsonrpc.INVALID_REQUEST, cse.Error(), nil)
+				span.SetStatus(codes.Error, cse.Error())
+				return "", rpcErr, cse
+			}
+		}
+	}
 
 	// Process the method
 	switch baseMessage.Method {

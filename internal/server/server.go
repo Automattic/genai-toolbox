@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/log"
 	"github.com/googleapis/mcp-toolbox/internal/prompts"
 	"github.com/googleapis/mcp-toolbox/internal/server/mcp/jsonrpc"
+	"github.com/googleapis/mcp-toolbox/internal/server/oauth"
 	"github.com/googleapis/mcp-toolbox/internal/server/resources"
 	"github.com/googleapis/mcp-toolbox/internal/sources"
 	"github.com/googleapis/mcp-toolbox/internal/telemetry"
@@ -62,6 +64,7 @@ type Server struct {
 	sseManager          *sseManager
 	ResourceMgr         *resources.ResourceManager
 	mcpPrmFile          string
+	oauthConfig         *oauth.Config
 }
 
 func InitializeConfigs(ctx context.Context, cfg ServerConfig) (
@@ -380,6 +383,43 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 
 	resourceManager := resources.NewResourceManager(sourcesMap, authServicesMap, embeddingModelsMap, toolsMap, toolsetsMap, promptsMap, promptsetsMap)
 
+	// Scan sources for OAuthProvider implementations (HTTP transport only).
+	var oauthCfg *oauth.Config
+	if !cfg.Stdio {
+		var oauthSourceName string
+		for name, src := range sourcesMap {
+			provider, ok := src.(sources.OAuthProvider)
+			if !ok {
+				continue
+			}
+			provCfg := provider.OAuthProviderConfig()
+			if provCfg == nil {
+				continue
+			}
+			if oauthCfg != nil {
+				return nil, fmt.Errorf("multiple sources implement OAuthProvider (at least %q and %q); only one is supported", oauthSourceName, name)
+			}
+			oauthSourceName = name
+			baseURL := cfg.PublicURL
+			if baseURL == "" {
+				if isNonRoutableAddr(cfg.Address) {
+					l.WarnContext(ctx, fmt.Sprintf("OAuth is active but --public-url is not set and bind address is %q. OAuth metadata will default to http://%s based on the bind address. If this URL is not externally reachable (e.g. behind a proxy, load balancer, or ingress), set --public-url to the externally reachable URL that clients use.", cfg.Address, addr))
+				}
+				baseURL = fmt.Sprintf("http://%s", addr)
+			}
+			baseURL = strings.TrimRight(baseURL, "/")
+			oauthCfg = &oauth.Config{
+				BaseURL:  baseURL,
+				Provider: provCfg,
+			}
+			// If the source can validate tokens against the upstream provider,
+			// wire it into the MCP auth gate so invalid tokens are rejected.
+			if validator, ok := src.(sources.OAuthTokenValidator); ok {
+				oauthCfg.Validate = validator.ValidateOAuthToken
+			}
+		}
+	}
+
 	s := &Server{
 		version:             cfg.Version,
 		sqlCommenterEnabled: cfg.SQLCommenter,
@@ -391,6 +431,7 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		ResourceMgr:         resourceManager,
 		toolboxUrl:          cfg.ToolboxUrl,
 		mcpPrmFile:          cfg.McpPrmFile,
+		oauthConfig:         oauthCfg,
 	}
 
 	// cors
@@ -402,8 +443,8 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
 		AllowCredentials: true, // required since Toolbox uses auth headers
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "Mcp-Session-Id", "MCP-Protocol-Version"},
-		ExposedHeaders:   []string{"Mcp-Session-Id"}, // headers that are sent to clients
-		MaxAge:           300,                        // cache preflight results for 5 minutes
+		ExposedHeaders:   []string{"Mcp-Session-Id", "WWW-Authenticate"}, // headers that are sent to clients
+		MaxAge:           300,                                            // cache preflight results for 5 minutes
 	}
 	r.Use(cors.Handler(corsOpts))
 	// validate hosts for DNS rebinding attacks
@@ -421,12 +462,12 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 	r.Use(hostCheck(allowedHostsMap))
 
 	// Host OAuth Protected Resource Metadata endpoint
-	mcpAuthEnabled := false
-	for _, authSvc := range s.ResourceMgr.GetAuthServiceMap() {
-		if genCfg, ok := authSvc.ToConfig().(generic.Config); ok && genCfg.McpEnabled {
-			mcpAuthEnabled = true
-			break
-		}
+	mcpAuthEnabled := hasMcpEnabledAuthService(s.ResourceMgr.GetAuthServiceMap())
+
+	// The OAuth proxy cannot coexist with a competing auth gate (an mcpEnabled
+	// authService or a manual PRM file); fail fast when both are configured.
+	if err := oauthCompatibilityError(oauthCfg != nil, mcpAuthEnabled, s.mcpPrmFile); err != nil {
+		return nil, err
 	}
 
 	// Manual PRM override
@@ -444,8 +485,9 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 		}
 	}
 
-	// Register route if auth is enabled or a manual file is provided
-	if mcpAuthEnabled || s.mcpPrmFile != "" {
+	// The OAuth proxy owns this endpoint when active, so skip the native handler
+	// to avoid registering the route twice.
+	if (mcpAuthEnabled || s.mcpPrmFile != "") && oauthCfg == nil {
 		r.Get("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, req *http.Request) {
 			// Serve from memory if file was loaded
 			if s.mcpPrmFile != "" {
@@ -459,6 +501,12 @@ func NewServer(ctx context.Context, cfg ServerConfig) (*Server, error) {
 
 			prmHandler(s, w, req)
 		})
+	}
+
+	// OAuth discovery and proxy endpoints (mounted before /mcp)
+	if oauthCfg != nil {
+		oauth.MountRoutes(r, oauthCfg)
+		l.InfoContext(ctx, fmt.Sprintf("OAuth proxy enabled (authorize: %s, client_id: %s)", oauthCfg.Provider.AuthorizeEndpoint, oauthCfg.Provider.ClientID))
 	}
 
 	// control plane
@@ -602,4 +650,85 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) Addr() string {
 	return s.listener.Addr().String()
+}
+
+// CheckOAuthCompatibility re-validates the OAuth-proxy / auth-gate invariant for
+// a (re)loaded set of sources and auth services. The OAuth discovery/proxy
+// routes and the mcpAuthMiddleware are bound at startup but read the live
+// resource set per request, so a reload that introduces a competing auth gate
+// must be rejected rather than silently breaking authentication.
+func (s *Server) CheckOAuthCompatibility(srcs map[string]sources.Source, authServices map[string]auth.AuthService) error {
+	return oauthCompatibilityError(hasOAuthProxySource(srcs), hasMcpEnabledAuthService(authServices), s.mcpPrmFile)
+}
+
+func hasOAuthProxySource(srcs map[string]sources.Source) bool {
+	for _, src := range srcs {
+		if provider, ok := src.(sources.OAuthProvider); ok && provider.OAuthProviderConfig() != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMcpEnabledAuthService(authServices map[string]auth.AuthService) bool {
+	for _, authSvc := range authServices {
+		if genCfg, ok := authSvc.ToConfig().(generic.Config); ok && genCfg.McpEnabled {
+			return true
+		}
+	}
+	return false
+}
+
+func oauthCompatibilityError(oauthProxyActive, mcpAuthEnabled bool, mcpPrmFile string) error {
+	if !oauthProxyActive {
+		return nil
+	}
+	// The generic authService would validate (and likely reject) tokens issued
+	// through the proxy flow before the proxy's own gate runs.
+	if mcpAuthEnabled {
+		return fmt.Errorf("the OAuth proxy (a source with oauth_base_url) cannot be combined with MCP server-wide auth (an authService with mcpEnabled); configure only one")
+	}
+	// Both the proxy and a manual PRM file own the protected-resource metadata endpoint.
+	if mcpPrmFile != "" {
+		return fmt.Errorf("the OAuth proxy (a source with oauth_base_url) cannot be combined with --mcp-prm-file; both serve the protected-resource metadata endpoint, so configure only one")
+	}
+	return nil
+}
+
+// isNonRoutableAddr reports whether addr is a bind address that is unlikely to
+// be externally reachable, so OAuth metadata derived from it would be wrong.
+func isNonRoutableAddr(addr string) bool {
+	switch addr {
+	case "", "0.0.0.0", "127.0.0.1", "localhost":
+		return true
+	default:
+		return false
+	}
+}
+
+// WarnIfOAuthConfigChanged checks whether the OAuth proxy configuration derived
+// from a reloaded set of sources differs from the one computed at startup. The
+// OAuth discovery/proxy routes and middleware are mounted on the router at
+// startup and are not re-mounted on dynamic reload, so a change requires a
+// restart to take effect. This logs a warning rather than silently running
+// stale OAuth settings.
+func (s *Server) WarnIfOAuthConfigChanged(ctx context.Context, newSources map[string]sources.Source) {
+	var newProvider *sources.OAuthConfig
+	for _, src := range newSources {
+		if provider, ok := src.(sources.OAuthProvider); ok {
+			if pc := provider.OAuthProviderConfig(); pc != nil {
+				newProvider = pc
+				break
+			}
+		}
+	}
+
+	var curProvider *sources.OAuthConfig
+	if s.oauthConfig != nil {
+		curProvider = s.oauthConfig.Provider
+	}
+
+	if !reflect.DeepEqual(curProvider, newProvider) {
+		s.logger.WarnContext(ctx, "OAuth proxy configuration changed during reload; the OAuth discovery/proxy routes are bound at startup, so a restart is required for the change to take effect.")
+	}
 }

@@ -19,6 +19,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -29,6 +31,7 @@ import (
 	"github.com/googleapis/mcp-toolbox/internal/testutils"
 	"github.com/googleapis/mcp-toolbox/internal/util"
 	"github.com/looker-open-source/sdk-codegen/go/rtl"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 func TestParseFromYamlLooker(t *testing.T) {
@@ -118,6 +121,154 @@ func TestFailParseFromYaml(t *testing.T) {
 			errStr := err.Error()
 			if errStr != tc.err {
 				t.Fatalf("unexpected error: got %q, want %q", errStr, tc.err)
+			}
+		})
+	}
+}
+
+func TestValidateOAuthTokenForwardsBearerHeader(t *testing.T) {
+	var mu sync.Mutex
+	var gotAuth string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if a := r.Header.Get("Authorization"); a != "" {
+			gotAuth = a
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"1"}`))
+	}))
+	t.Cleanup(ts.Close)
+
+	s := &looker.Source{
+		Config: looker.Config{
+			Name:           "t",
+			BaseURL:        ts.URL,
+			UseClientOAuth: "true",
+		},
+		ApiSettings: &rtl.ApiSettings{
+			BaseUrl:    ts.URL,
+			ApiVersion: "4.0",
+			VerifySsl:  false,
+			Timeout:    30,
+		},
+	}
+
+	if err := s.ValidateOAuthToken(context.Background(), "Bearer abc123"); err != nil {
+		t.Fatalf("ValidateOAuthToken returned error: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotAuth != "Bearer abc123" {
+		t.Errorf("Authorization header sent to Looker = %q, want %q (the full Bearer header must be forwarded)", gotAuth, "Bearer abc123")
+	}
+}
+
+func TestInitializeOAuthProxyValidation(t *testing.T) {
+	ctx, err := testutils.ContextWithNewLogger()
+	if err != nil {
+		t.Fatalf("unable to create context: %s", err)
+	}
+	ctx = util.WithUserAgent(ctx, "test-agent")
+	tracer := noop.NewTracerProvider().Tracer("")
+
+	cases := []struct {
+		name      string
+		cfg       looker.Config
+		wantErr   bool
+		errSubstr string
+	}{
+		{
+			name:    "proxy with use_client_oauth true is valid",
+			cfg:     looker.Config{Name: "l", Type: "looker", BaseURL: "https://looker.example.com", Timeout: "600s", UseClientOAuth: "true", OAuthBaseURL: "https://looker.example.com", OAuthClientID: "mcp"},
+			wantErr: false,
+		},
+		{
+			name:      "proxy without client_id is rejected",
+			cfg:       looker.Config{Name: "l", Type: "looker", BaseURL: "https://looker.example.com", Timeout: "600s", UseClientOAuth: "true", OAuthBaseURL: "https://looker.example.com"},
+			wantErr:   true,
+			errSubstr: "oauth_client_id is required",
+		},
+		{
+			name:      "proxy with custom auth header is rejected",
+			cfg:       looker.Config{Name: "l", Type: "looker", BaseURL: "https://looker.example.com", Timeout: "600s", UseClientOAuth: "X-Looker-Auth", OAuthBaseURL: "https://looker.example.com", OAuthClientID: "mcp"},
+			wantErr:   true,
+			errSubstr: "use_client_oauth: 'true'",
+		},
+		{
+			name:      "proxy with disabled client oauth is rejected",
+			cfg:       looker.Config{Name: "l", Type: "looker", BaseURL: "https://looker.example.com", Timeout: "600s", UseClientOAuth: "false", OAuthBaseURL: "https://looker.example.com", OAuthClientID: "mcp"},
+			wantErr:   true,
+			errSubstr: "use_client_oauth: 'true'",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tc.cfg.Initialize(ctx, tracer)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.errSubstr) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestOAuthProviderConfigScopes(t *testing.T) {
+	cases := []struct {
+		name   string
+		scopes string
+		want   []string
+	}{
+		{name: "empty defaults to cors_api", scopes: "", want: []string{"cors_api"}},
+		{name: "comma-separated with spaces", scopes: "cors_api, all_access ,foo", want: []string{"cors_api", "all_access", "foo"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &looker.Source{Config: looker.Config{
+				BaseURL:        "https://looker.example.com",
+				UseClientOAuth: "true",
+				OAuthBaseURL:   "https://looker.example.com",
+				OAuthClientID:  "mcp",
+				OAuthScopes:    tc.scopes,
+			}}
+			pc := s.OAuthProviderConfig()
+			if pc == nil {
+				t.Fatal("expected non-nil OAuthConfig")
+			}
+			if !cmp.Equal(pc.Scopes, tc.want) {
+				t.Errorf("scopes = %v, want %v", pc.Scopes, tc.want)
+			}
+		})
+	}
+}
+
+func TestUseClientAuthorization(t *testing.T) {
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"", false},
+		{"   ", false},
+		{"false", false},
+		{"False", false},
+		{"true", true},
+		{"True", true},
+		{"X-Looker-Auth", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.value, func(t *testing.T) {
+			s := &looker.Source{Config: looker.Config{UseClientOAuth: tc.value}}
+			if got := s.UseClientAuthorization(); got != tc.want {
+				t.Errorf("UseClientAuthorization(%q) = %v, want %v", tc.value, got, tc.want)
 			}
 		})
 	}
