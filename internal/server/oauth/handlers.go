@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -122,16 +123,68 @@ func tokenHandler(cfg *Config) http.HandlerFunc {
 		}
 		defer resp.Body.Close()
 
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			slog.Error("failed to read token response body", "error", err)
+			http.Error(w, "token exchange failed", http.StatusBadGateway)
+			return
+		}
+
+		// Looker's token endpoint returns `"refresh_token": null` on refresh_token
+		// grants (it does not rotate refresh tokens). The MCP client's OAuthTokensSchema
+		// accepts only string|undefined for that field, so an explicit JSON null fails
+		// validation; the client swallows the error and silently falls back to a full
+		// browser re-authorization on every session. Drop null-valued fields on success
+		// so the field is absent rather than null, letting the client preserve and reuse
+		// its existing refresh token for a silent refresh.
+		if resp.StatusCode == http.StatusOK && strings.Contains(resp.Header.Get("Content-Type"), "json") {
+			if cleaned, ok := stripNullJSONFields(body); ok {
+				body = cleaned
+			}
+		}
+
 		for key, values := range resp.Header {
+			// Content-Length is recomputed below since stripping null fields changes
+			// the body length.
+			if http.CanonicalHeaderKey(key) == "Content-Length" {
+				continue
+			}
 			for _, value := range values {
 				w.Header().Add(key, value)
 			}
 		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 		w.WriteHeader(resp.StatusCode)
-		if _, err := io.Copy(w, resp.Body); err != nil {
-			slog.Error("failed to copy token response body", "error", err)
+		if _, err := w.Write(body); err != nil {
+			slog.Error("failed to write token response body", "error", err)
 		}
 	}
+}
+
+// stripNullJSONFields removes top-level keys whose value is JSON null from a JSON
+// object body, returning the rewritten body and true. It returns false when the body
+// is not a JSON object or has no null fields, in which case the caller keeps the
+// original bytes. Non-null fields are preserved verbatim (numbers are not coerced).
+func stripNullJSONFields(body []byte) ([]byte, bool) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return nil, false
+	}
+	removed := false
+	for key, value := range obj {
+		if string(value) == "null" {
+			delete(obj, key)
+			removed = true
+		}
+	}
+	if !removed {
+		return nil, false
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // registerHandler implements dynamic client registration.

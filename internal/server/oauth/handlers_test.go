@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -223,6 +224,106 @@ func TestTokenHandler(t *testing.T) {
 		}
 		if body["access_token"] != "test-access-token" {
 			t.Errorf("expected access_token test-access-token, got %s", body["access_token"])
+		}
+	})
+
+	t.Run("strips null refresh_token on refresh grant", func(t *testing.T) {
+		// Looker returns refresh_token:null on refresh_token grants. The proxy must
+		// drop the null field so the MCP client keeps its existing refresh token
+		// instead of failing schema validation and forcing a browser re-auth.
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			// Encoded by hand to emit an explicit JSON null, matching Looker.
+			_, _ = w.Write([]byte(`{"access_token":"new-access-token","token_type":"Bearer","expires_in":3599,"refresh_token":null}`))
+		}))
+		defer upstream.Close()
+
+		cfg := &Config{
+			BaseURL: "http://localhost:5000",
+			Provider: &sources.OAuthConfig{
+				AuthorizeEndpoint: "https://looker.example.com/authorize",
+				TokenEndpoint:     upstream.URL,
+				ClientID:          "test-client-id",
+				Scopes:            []string{"cors_api"},
+				VerifySSL:         false,
+			},
+		}
+
+		handler := tokenHandler(cfg)
+
+		req := httptest.NewRequest(http.MethodPost, "/token",
+			strings.NewReader("grant_type=refresh_token&refresh_token=existing-refresh-token"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rr := httptest.NewRecorder()
+
+		handler.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Errorf("expected status 200, got %d", rr.Code)
+		}
+
+		// refresh_token must be absent (not present as null), so the client preserves
+		// its own. Other fields must survive with their original types.
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(rr.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("failed to decode response body: %v", err)
+		}
+		if _, present := raw["refresh_token"]; present {
+			t.Errorf("expected refresh_token field to be stripped, got %s", rr.Body.String())
+		}
+		if string(raw["access_token"]) != `"new-access-token"` {
+			t.Errorf("expected access_token preserved, got %s", raw["access_token"])
+		}
+		if string(raw["expires_in"]) != "3599" {
+			t.Errorf("expected expires_in preserved as number 3599, got %s", raw["expires_in"])
+		}
+
+		// Content-Length header must match the rewritten body length.
+		if cl := rr.Header().Get("Content-Length"); cl != strconv.Itoa(rr.Body.Len()) {
+			t.Errorf("expected Content-Length %d, got %q", rr.Body.Len(), cl)
+		}
+	})
+
+	t.Run("preserves non-null refresh_token on auth code grant", func(t *testing.T) {
+		// The initial authorization_code exchange returns a real refresh token; it
+		// must pass through untouched.
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token":  "test-access-token",
+				"token_type":    "Bearer",
+				"expires_in":    3599,
+				"refresh_token": "real-refresh-token",
+			})
+		}))
+		defer upstream.Close()
+
+		cfg := &Config{
+			BaseURL: "http://localhost:5000",
+			Provider: &sources.OAuthConfig{
+				AuthorizeEndpoint: "https://looker.example.com/authorize",
+				TokenEndpoint:     upstream.URL,
+				ClientID:          "test-client-id",
+				Scopes:            []string{"cors_api"},
+				VerifySSL:         false,
+			},
+		}
+
+		handler := tokenHandler(cfg)
+
+		req := httptest.NewRequest(http.MethodPost, "/token",
+			strings.NewReader("grant_type=authorization_code&code=auth-code-123"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rr := httptest.NewRecorder()
+
+		handler.ServeHTTP(rr, req)
+
+		var body map[string]any
+		if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+			t.Fatalf("failed to decode response body: %v", err)
+		}
+		if body["refresh_token"] != "real-refresh-token" {
+			t.Errorf("expected refresh_token preserved, got %v", body["refresh_token"])
 		}
 	})
 
