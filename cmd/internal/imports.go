@@ -257,6 +257,7 @@ import (
 	_ "github.com/googleapis/mcp-toolbox/internal/tools/sqlite/sqlitesql"
 	_ "github.com/googleapis/mcp-toolbox/internal/tools/tidb/tidbexecutesql"
 	_ "github.com/googleapis/mcp-toolbox/internal/tools/tidb/tidbsql"
+	_ "github.com/googleapis/mcp-toolbox/internal/tools/trino/trinodescribetable"
 	_ "github.com/googleapis/mcp-toolbox/internal/tools/trino/trinoexecutesql"
 	_ "github.com/googleapis/mcp-toolbox/internal/tools/trino/trinosql"
 	_ "github.com/googleapis/mcp-toolbox/internal/tools/utility/wait"

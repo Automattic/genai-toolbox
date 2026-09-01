@@ -69,10 +69,9 @@ templateParameters:
 ---
 kind: tool
 name: describe_table
-type: trino-sql
+type: trino-describe-table
 source: trino-source
-description: Describe the columns of a table. The table name can be unqualified, partially qualified (schema.table), or fully qualified (catalog.schema.table).
-statement: DESCRIBE {{.table}}
+description: "Describe a table: returns the table's own description (the comment set on it, when there is one) together with one entry per column giving its name, type and comment. The table name can be unqualified, partially qualified (schema.table), or fully qualified (catalog.schema.table)."
 templateParameters:
 - name: table
   type: string
