@@ -671,3 +671,13 @@ func TestParseFromYamlTrino(t *testing.T) {
 		})
 	}
 }
+
+func TestGetCatalogAndSchema(t *testing.T) {
+	s := &Source{Config: Config{Catalog: "iceberg", Schema: "tracks"}}
+	if got := s.GetCatalog(); got != "iceberg" {
+		t.Errorf("GetCatalog() = %q, want %q", got, "iceberg")
+	}
+	if got := s.GetSchema(); got != "tracks" {
+		t.Errorf("GetSchema() = %q, want %q", got, "tracks")
+	}
+}

@@ -156,6 +156,18 @@ func (s *Source) GetAuthTokenHeaderName() string {
 	return strings.TrimSpace(s.UseClientAuth)
 }
 
+// GetCatalog returns the catalog the source is configured to connect to.
+// Tools use it to qualify an unqualified table name the same way the Trino
+// session would.
+func (s *Source) GetCatalog() string {
+	return s.Catalog
+}
+
+// GetSchema returns the schema the source is configured to connect to.
+func (s *Source) GetSchema() string {
+	return s.Schema
+}
+
 // appendNamedParam appends a single sql.Named parameter to params, returning
 // a fresh slice to avoid aliasing the caller's backing array.
 func appendNamedParam(params []any, name string, value any) []any {
