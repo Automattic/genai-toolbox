@@ -26,7 +26,7 @@ description: "Details of the Trino prebuilt configuration."
     *   `list_catalogs`: List all catalogs available in the cluster.
     *   `list_schemas`: List all schemas in a given catalog.
     *   `list_tables`: List all tables in a given schema.
-    *   `describe_table`: Describe the columns of a table.
+    *   `describe_table`: Describe a table: its own description plus its columns.
     *   `show_create_table`: Show the CREATE TABLE statement for a table.
     *   `show_stats`: Show table statistics.
     *   `sample_table`: Return a sample of rows from a table (with a LIMIT).
